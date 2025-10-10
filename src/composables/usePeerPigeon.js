@@ -25,9 +25,9 @@ export function usePeerPigeon() {
         enableCrypto: false,
         enableDistributedStorage: false,
         maxPeers: 10,
-        minPeers: 1,
-        autoConnect: true,
-        autoDiscovery: true
+        minPeers: 0,  // Don't require any minimum peers
+        autoConnect: false,  // Disable auto-connect
+        autoDiscovery: false  // Disable auto-discovery to prevent unsolicited connections
       })
 
       console.log('PeerPigeonMesh instance created, calling init()...')
@@ -67,8 +67,25 @@ export function usePeerPigeon() {
 
       // Set up message listener for incoming files
       pigeon.value.on('messageReceived', (messageData) => {
-        console.log('📨 Message received:', messageData)
+        console.log('📨 Message received event fired!', messageData)
         handleIncomingData(messageData.content, messageData.from)
+      })
+
+      // ALSO listen on the raw event emitter to debug
+      if (pigeon.value.connectionManager) {
+        console.log('Setting up direct message listener on connectionManager...')
+        pigeon.value.connectionManager.on('messageReceived', (data) => {
+          console.log('📨 Direct message from connectionManager:', data)
+        })
+      }
+
+      // Listen for peer connections
+      pigeon.value.on('peerConnected', (data) => {
+        console.log('🤝 Peer connected:', data.peerId)
+      })
+
+      pigeon.value.on('peerDisconnected', (data) => {
+        console.log('👋 Peer disconnected:', data.peerId)
       })
 
       // Handle peer disconnections
@@ -93,6 +110,7 @@ export function usePeerPigeon() {
       
       // Check if this is metadata or chunk data
       if (data.type === 'file-metadata') {
+        console.log('📋 Received file metadata:', data.name, data.size, 'bytes,', data.totalChunks, 'chunks')
         // Initialize a new file transfer
         const fileId = data.fileId
         receivedFiles.push({
@@ -129,14 +147,41 @@ export function usePeerPigeon() {
           receivedFiles[fileIndex].progress = progress
           receivedFiles[fileIndex].receivedSize = buffer.receivedChunks * CHUNK_SIZE
           
-          // Check if all chunks received
-          if (buffer.receivedChunks === buffer.totalChunks) {
+          // Log progress every 100 chunks
+          if (buffer.receivedChunks % 100 === 0) {
+            console.log(`📥 Receiving progress: ${buffer.receivedChunks}/${buffer.totalChunks} chunks (${Math.round(progress)}%)`)
+          }
+          
+          // Check if all chunks received - verify every chunk is present
+          if (buffer.receivedChunks >= buffer.totalChunks) {
+            console.log(`📊 Received ${buffer.receivedChunks}/${buffer.totalChunks} chunks, verifying completeness...`)
+            
+            // Check for missing chunks
+            const missingChunks = []
+            for (let i = 0; i < buffer.totalChunks; i++) {
+              if (!buffer.chunks[i]) {
+                missingChunks.push(i)
+              }
+            }
+            
+            if (missingChunks.length > 0) {
+              console.error(`❌ Missing ${missingChunks.length} chunks:`, missingChunks.slice(0, 10))
+              // Don't complete - wait for missing chunks
+              return
+            }
+            
+            console.log(`✅ All chunks verified! Assembling file...`)
+            
             // Combine all chunks into a blob
-            const completeData = new Uint8Array(
-              buffer.chunks.reduce((acc, chunk) => acc + chunk.length, 0)
-            )
+            let totalSize = 0
+            for (let i = 0; i < buffer.totalChunks; i++) {
+              totalSize += buffer.chunks[i].length
+            }
+            
+            const completeData = new Uint8Array(totalSize)
             let offset = 0
-            for (const chunk of buffer.chunks) {
+            for (let i = 0; i < buffer.totalChunks; i++) {
+              const chunk = buffer.chunks[i]
               completeData.set(chunk, offset)
               offset += chunk.length
             }
@@ -145,8 +190,9 @@ export function usePeerPigeon() {
             receivedFiles[fileIndex].blob = blob
             receivedFiles[fileIndex].status = 'complete'
             receivedFiles[fileIndex].progress = 100
+            receivedFiles[fileIndex].receivedSize = totalSize
             
-            console.log(`File received: ${receivedFiles[fileIndex].name}`)
+            console.log(`✅ File complete: ${receivedFiles[fileIndex].name} (${totalSize} bytes)`)
             fileBuffers.delete(fileId)
           }
         }
@@ -168,19 +214,43 @@ export function usePeerPigeon() {
       isSending.value = true
       sendingProgress.value = 0
 
+      // First, establish a peer-to-peer connection if not already connected
+      console.log(`🔗 Checking connection to peer ${targetPeerId.substring(0, 8)}...`)
+      const isConnected = pigeon.value.connectionManager.peers.has(targetPeerId)
+      console.log(`🔗 Already connected: ${isConnected}`)
+      
+      if (!isConnected) {
+        console.log(`🔗 Establishing peer connection to ${targetPeerId.substring(0, 8)}...`)
+        await pigeon.value.connectionManager.connectToPeer(targetPeerId)
+        
+        // Wait for the connection to establish
+        console.log(`⏳ Waiting for connection to establish...`)
+        await new Promise(resolve => setTimeout(resolve, 3000))
+        
+        // Verify connection was established
+        const nowConnected = pigeon.value.connectionManager.peers.has(targetPeerId)
+        console.log(`✅ Connection established: ${nowConnected}`)
+        
+        if (!nowConnected) {
+          throw new Error(`Failed to establish connection to peer ${targetPeerId.substring(0, 8)}`)
+        }
+      }
+
       const fileId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
       const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
 
       console.log(`📋 File metadata: ID=${fileId}, totalChunks=${totalChunks}`)
 
       // Send file metadata first
-      await pigeon.value.sendDirectMessage(targetPeerId, {
+      console.log(`📤 Sending metadata to ${targetPeerId.substring(0, 8)}...`)
+      const metadataResult = await pigeon.value.sendDirectMessage(targetPeerId, {
         type: 'file-metadata',
         fileId: fileId,
         name: file.name,
         size: file.size,
         totalChunks: totalChunks
       })
+      console.log(`📤 Metadata send result:`, metadataResult)
 
       console.log(`Sending file: ${file.name} (${file.size} bytes) in ${totalChunks} chunks`)
 

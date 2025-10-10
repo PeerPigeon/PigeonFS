@@ -85,13 +85,25 @@
           </label>
         </div>
 
-        <input 
-          v-model="targetPeerId"
-          type="text"
-          class="target-peer-input"
-          placeholder="Enter recipient's Peer ID"
-          :disabled="isSending"
-        />
+        <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+          <input 
+            v-model="targetPeerId"
+            type="text"
+            class="target-peer-input"
+            style="margin-bottom: 0;"
+            placeholder="Enter recipient's Peer ID"
+            :disabled="isSending"
+            @paste.stop
+          />
+          <button 
+            @click="pasteFromClipboard"
+            class="send-button"
+            style="width: auto; padding: 8px 16px;"
+            :disabled="isSending"
+          >
+            📋 Paste
+          </button>
+        </div>
 
         <button 
           @click="handleSendFile"
@@ -265,6 +277,16 @@ const copyPeerId = async () => {
         copied.value = false
       }, 2000)
     }
+  }
+}
+
+const pasteFromClipboard = async () => {
+  try {
+    const text = await navigator.clipboard.readText()
+    targetPeerId.value = text
+  } catch (error) {
+    console.error('Failed to paste:', error)
+    alert('Failed to paste. Please use Cmd+V or type the peer ID.')
   }
 }
 
