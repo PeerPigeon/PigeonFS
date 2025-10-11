@@ -2,7 +2,7 @@
   <div class="container">
     <!-- Header -->
     <div class="header">
-      <h1>🕊️ PigeonFS</h1>
+      <h1><img src="./assets/pigeonlogo.jpg" alt="PigeonFS" style="height: 1.5em; vertical-align: middle; border-radius: 8px; margin-right: 8px;" /> <span style="color: black;">PigeonFS</span></h1>
       <p>Peer-to-peer file sharing powered by PeerPigeon</p>
     </div>
 
@@ -181,14 +181,13 @@
       </div>
     </div>
 
-    <!-- Instructions when disconnected -->
-    <div v-else class="empty-state" style="margin-top: 48px;">
-      <div class="empty-state-icon">🕊️</div>
-      <h3 style="margin-bottom: 16px;">Welcome to PigeonFS</h3>
-      <p style="max-width: 600px; margin: 0 auto; line-height: 1.6;">
-        PigeonFS enables secure, peer-to-peer file sharing directly between browsers.
-        No files are stored on any server - they're transferred directly between peers.
-      </p>
+    <!-- Welcome Screen (when not connected) -->
+    <div v-else class="welcome-screen">
+      <div class="empty-state-icon">
+        <img src="./assets/pigeonlogo.jpg" alt="PigeonFS" style="width: 120px; height: 120px; border-radius: 16px;" />
+      </div>
+      <h2>Welcome to PigeonFS</h2>
+      <p>Secure peer-to-peer file sharing using WebRTC</p>
       <button 
         @click="handleConnect"
         class="send-button"
