@@ -179,6 +179,129 @@
           </li>
         </ul>
       </div>
+
+      <!-- PagingStorage Section -->
+      <div class="card">
+        <h2>💾 Distributed Storage</h2>
+        <p style="margin-bottom: 16px; color: #666; font-size: 0.9rem;">
+          Store and sync data across connected peers
+        </p>
+
+        <!-- Storage Status -->
+        <div class="storage-status" style="margin-bottom: 16px;">
+          <div style="display: flex; gap: 16px; font-size: 0.9rem;">
+            <span>Status: <strong :style="{ color: storageReady ? '#28a745' : '#dc3545' }">
+              {{ storageReady ? '✅ Ready' : '❌ Not Ready' }}
+            </strong></span>
+            <span>Peers: <strong>{{ storagePeerCount }}</strong></span>
+            <span>Keys: <strong>{{ storageTotalKeys }}</strong></span>
+            <span>Pages: <strong>{{ storageTotalPages }}</strong></span>
+          </div>
+        </div>
+
+        <!-- Storage Operations -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;">
+          <div>
+            <label style="display: block; margin-bottom: 4px; font-weight: 600;">Key:</label>
+            <input 
+              v-model="storageKey" 
+              placeholder="e.g., user:123" 
+              style="width: 100%;"
+              @keyup.enter="handleStorageGet"
+            />
+          </div>
+          <div>
+            <label style="display: block; margin-bottom: 4px; font-weight: 600;">Value:</label>
+            <input 
+              v-model="storageValue" 
+              placeholder="Enter value or JSON" 
+              style="width: 100%;"
+              @keyup.enter="handleStorageSet"
+            />
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+          <button 
+            @click="handleStorageSet"
+            class="send-button"
+            style="flex: 1; padding: 8px;"
+            :disabled="!storageReady || !storageKey || !storageValue"
+          >
+            💾 Store
+          </button>
+          <button 
+            @click="handleStorageGet"
+            class="send-button"
+            style="flex: 1; padding: 8px; background: #17a2b8;"
+            :disabled="!storageReady || !storageKey"
+          >
+            🔍 Get
+          </button>
+          <button 
+            @click="handleStorageDelete"
+            class="send-button"
+            style="flex: 1; padding: 8px; background: #dc3545;"
+            :disabled="!storageReady || !storageKey"
+          >
+            🗑️ Delete
+          </button>
+        </div>
+
+        <!-- Quick Actions -->
+        <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+          <button 
+            @click="runStorageDemo"
+            class="send-button"
+            style="flex: 1; padding: 6px; background: #6f42c1; font-size: 0.85rem;"
+            :disabled="!storageReady"
+          >
+            🎯 Run Demo
+          </button>
+          <button 
+            @click="clearStorage"
+            class="send-button"
+            style="flex: 1; padding: 6px; background: #fd7e14; font-size: 0.85rem;"
+            :disabled="!storageReady"
+          >
+            🧹 Clear Cache
+          </button>
+          <button 
+            @click="exportStorage"
+            class="send-button"
+            style="flex: 1; padding: 6px; background: #20c997; font-size: 0.85rem;"
+            :disabled="!storageReady"
+          >
+            📤 Export
+          </button>
+        </div>
+
+        <!-- Storage Results -->
+        <div v-if="storageResult" class="storage-result" style="margin-bottom: 16px;">
+          <label style="display: block; margin-bottom: 4px; font-weight: 600;">Result:</label>
+          <pre style="background: #f8f9fa; padding: 12px; border-radius: 4px; font-size: 0.8rem; max-height: 150px; overflow-y: auto;">{{ storageResult }}</pre>
+        </div>
+
+        <!-- Storage Error -->
+        <div v-if="storageError" style="color: #dc3545; margin-bottom: 16px; padding: 12px; background: #f8d7da; border-radius: 8px; font-size: 0.9rem;">
+          ❌ {{ storageError }}
+        </div>
+
+        <!-- Storage Stats -->
+        <details style="margin-top: 16px;">
+          <summary style="cursor: pointer; font-weight: 600; margin-bottom: 8px;">📊 Advanced Stats</summary>
+          <div v-if="storageStats" style="font-size: 0.8rem; color: #666;">
+            <div><strong>Memory Pressure:</strong> {{ (storageMemoryPressure * 100).toFixed(1) }}%</div>
+            <div><strong>Load Balanced:</strong> {{ storageLoadBalanced ? 'Yes' : 'No' }}</div>
+            <div><strong>Average Page Size:</strong> {{ storageStats.averagePageSize?.toFixed(0) || 0 }} bytes</div>
+            <div v-if="storageStats.cache">
+              <strong>Cache:</strong> 
+              {{ storageStats.cache.memoryPages }}/{{ storageStats.cache.maxMemoryPages }} memory pages,
+              {{ storageStats.cache.dirtyPages }} dirty
+            </div>
+          </div>
+        </details>
+      </div>
     </div>
 
     <!-- Welcome Screen (when not connected) -->
@@ -200,8 +323,9 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
 import { usePeerPigeon } from './composables/usePeerPigeon'
+import { usePagingStorage } from './composables/usePagingStorage'
 
 const {
   myPeerId,
@@ -212,8 +336,15 @@ const {
   connect,
   sendFile,
   downloadFile,
-  disconnect
+  disconnect,
+  pigeon
 } = usePeerPigeon()
+
+// PagingStorage setup
+const storage = usePagingStorage({
+  pageSize: 2048, // Smaller pages for demo
+  statsUpdateInterval: 2000
+})
 
 const selectedFile = ref(null)
 const targetPeerId = ref('')
@@ -223,10 +354,33 @@ const connectionError = ref('')
 const fileInput = ref(null)
 const peerIdInput = ref(null)
 
+// Storage UI state
+const storageKey = ref('')
+const storageValue = ref('')
+const storageResult = ref('')
+const storageError = ref('')
+
+// Storage reactive properties
+const storageReady = computed(() => storage.isReady?.value || false)
+const storagePeerCount = computed(() => storage.peerCount?.value || 0)
+const storageTotalKeys = computed(() => storage.totalKeys?.value || 0)
+const storageTotalPages = computed(() => storage.totalPages?.value || 0)
+const storageMemoryPressure = computed(() => storage.memoryPressure?.value || 0)
+const storageLoadBalanced = computed(() => storage.isLoadBalanced?.value || false)
+const storageStats = computed(() => storage.stats || {})
+
 const handleConnect = async () => {
   try {
     connectionError.value = ''
+    storageError.value = ''
     await connect()
+    
+    // Initialize storage when connected
+    if (pigeon.value) {
+      console.log('Initializing PagingStorage...')
+      await storage.initialize(pigeon.value)
+      console.log('PagingStorage ready!')
+    }
   } catch (error) {
     console.error('Connection failed:', error)
     connectionError.value = error.message || 'Failed to connect to PigeonHub. Please try again.'
@@ -297,13 +451,170 @@ const formatFileSize = (bytes) => {
   return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i]
 }
 
+// Storage operation handlers
+const handleStorageSet = async () => {
+  try {
+    storageError.value = ''
+    storageResult.value = ''
+    
+    if (!storageKey.value || !storageValue.value) return
+    
+    // Try to parse as JSON, fallback to string
+    let value = storageValue.value
+    try {
+      value = JSON.parse(storageValue.value)
+    } catch {
+      // Keep as string if not valid JSON
+    }
+    
+    await storage.set(storageKey.value, value)
+    storageResult.value = `✅ Stored: ${storageKey.value}`
+    
+    // Clear value after successful store
+    storageValue.value = ''
+    
+  } catch (error) {
+    console.error('Storage set error:', error)
+    storageError.value = `Failed to store: ${error.message}`
+  }
+}
+
+const handleStorageGet = async () => {
+  try {
+    storageError.value = ''
+    storageResult.value = ''
+    
+    if (!storageKey.value) return
+    
+    const value = await storage.get(storageKey.value)
+    
+    if (value !== undefined) {
+      storageResult.value = typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+      storageValue.value = storageResult.value
+    } else {
+      storageResult.value = '❌ Key not found'
+    }
+    
+  } catch (error) {
+    console.error('Storage get error:', error)
+    storageError.value = `Failed to retrieve: ${error.message}`
+  }
+}
+
+const handleStorageDelete = async () => {
+  try {
+    storageError.value = ''
+    storageResult.value = ''
+    
+    if (!storageKey.value) return
+    
+    const deleted = await storage.remove(storageKey.value)
+    
+    if (deleted) {
+      storageResult.value = `✅ Deleted: ${storageKey.value}`
+      storageValue.value = ''
+    } else {
+      storageResult.value = '❌ Key not found or already deleted'
+    }
+    
+  } catch (error) {
+    console.error('Storage delete error:', error)
+    storageError.value = `Failed to delete: ${error.message}`
+  }
+}
+
+const runStorageDemo = async () => {
+  try {
+    storageError.value = ''
+    storageResult.value = 'Running demo...'
+    
+    // Store some demo data
+    const demoData = {
+      'demo:user': { name: 'Alice', role: 'admin' },
+      'demo:config': { theme: 'dark', lang: 'en' },
+      'demo:counter': 42,
+      'demo:message': 'Hello from PagingStorage!',
+      'demo:timestamp': new Date().toISOString()
+    }
+    
+    let stored = 0
+    for (const [key, value] of Object.entries(demoData)) {
+      await storage.set(key, value)
+      stored++
+    }
+    
+    // Retrieve and display one item
+    const user = await storage.get('demo:user')
+    
+    storageResult.value = `✅ Demo complete!\nStored ${stored} items\nSample data: ${JSON.stringify(user, null, 2)}`
+    
+  } catch (error) {
+    console.error('Demo error:', error)
+    storageError.value = `Demo failed: ${error.message}`
+  }
+}
+
+const clearStorage = async () => {
+  try {
+    storageError.value = ''
+    await storage.clearCache()
+    storageResult.value = '✅ Cache cleared'
+  } catch (error) {
+    console.error('Clear error:', error)
+    storageError.value = `Failed to clear cache: ${error.message}`
+  }
+}
+
+const exportStorage = async () => {
+  try {
+    storageError.value = ''
+    const exported = storage.exportData()
+    
+    if (exported && exported.totalKeys > 0) {
+      // Create downloadable file
+      const blob = new Blob([JSON.stringify(exported, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `pigeonfs-storage-${exported.peerId}-${Date.now()}.json`
+      a.click()
+      URL.revokeObjectURL(url)
+      
+      storageResult.value = `✅ Exported ${exported.totalKeys} keys to file`
+    } else {
+      storageResult.value = '❌ No data to export'
+    }
+    
+  } catch (error) {
+    console.error('Export error:', error)
+    storageError.value = `Failed to export: ${error.message}`
+  }
+}
+
+// Watch for connection status changes
+watch(connectionStatus, async (newStatus) => {
+  if (newStatus === 'connected' && pigeon.value && !storage.isReady?.value) {
+    try {
+      console.log('Auto-initializing PagingStorage...')
+      await storage.initialize(pigeon.value)
+      console.log('PagingStorage auto-initialized!')
+    } catch (error) {
+      console.error('Failed to auto-initialize storage:', error)
+      storageError.value = `Storage initialization failed: ${error.message}`
+    }
+  }
+})
+
 // Auto-connect on mount
 onMounted(() => {
   handleConnect()
 })
 
 // Cleanup on unmount
-onUnmounted(() => {
+onUnmounted(async () => {
+  if (storage.isReady?.value) {
+    await storage.shutdown()
+  }
   disconnect()
 })
 </script>
