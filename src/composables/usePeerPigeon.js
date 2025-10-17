@@ -27,7 +27,9 @@ export function usePeerPigeon() {
         maxPeers: 10,
         minPeers: 0,  // Don't require any minimum peers
         autoConnect: false,  // Disable auto-connect
-        autoDiscovery: false  // Disable auto-discovery to prevent unsolicited connections
+        autoDiscovery: false,  // Disable auto-discovery to prevent unsolicited connections
+        usePigeonNS: true,  // Enable pigeonns resolver for mDNS ICE candidates
+        resolveMDNS: true  // Resolve .local addresses using pigeonns
       })
 
       console.log('PeerPigeonMesh instance created, calling init()...')
@@ -67,8 +69,19 @@ export function usePeerPigeon() {
 
       // Set up message listener for incoming files
       pigeon.value.on('messageReceived', (messageData) => {
-        console.log('📨 Message received event fired!', messageData)
-        handleIncomingData(messageData.content, messageData.from)
+        console.log('📨 Message received event fired!', {
+          from: messageData.from?.substring(0, 8),
+          contentType: typeof messageData.content,
+          hasType: messageData.content?.type,
+          direct: messageData.direct
+        })
+        
+        // Handle the message content
+        try {
+          handleIncomingData(messageData.content, messageData.from)
+        } catch (error) {
+          console.error('Error handling incoming data:', error)
+        }
       })
 
       // ALSO listen on the raw event emitter to debug
@@ -76,6 +89,18 @@ export function usePeerPigeon() {
         console.log('Setting up direct message listener on connectionManager...')
         pigeon.value.connectionManager.on('messageReceived', (data) => {
           console.log('📨 Direct message from connectionManager:', data)
+        })
+      }
+      
+      // Listen for all gossip messages to debug
+      if (pigeon.value.gossipManager) {
+        console.log('Setting up gossip manager listener...')
+        pigeon.value.gossipManager.on('messageReceived', (data) => {
+          console.log('📨 Gossip message received:', {
+            from: data.from?.substring(0, 8),
+            contentType: typeof data.content,
+            hasType: data.content?.type
+          })
         })
       }
 
@@ -221,11 +246,57 @@ export function usePeerPigeon() {
       
       if (!isConnected) {
         console.log(`🔗 Establishing peer connection to ${targetPeerId.substring(0, 8)}...`)
-        await pigeon.value.connectionManager.connectToPeer(targetPeerId)
         
-        // Wait for the connection to establish
+        // Create a promise that resolves when the peer connects
+        const connectionPromise = new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            cleanup()
+            reject(new Error('Connection timeout after 20 seconds'))
+          }, 20000)
+          
+          const onPeerConnected = (data) => {
+            console.log(`🔍 peerConnected event fired for: ${data.peerId?.substring(0, 8)}`)
+            if (data.peerId === targetPeerId) {
+              cleanup()
+              resolve()
+            }
+          }
+          
+          const onStatusChanged = (data) => {
+            // Also listen for status changes that might indicate connection
+            if (data.message && data.message.includes('Answer processed')) {
+              const peerId = data.message.match(/[a-f0-9]{8}\.\.\./)?.[0]?.replace('...', '')
+              if (peerId && targetPeerId.startsWith(peerId)) {
+                console.log(`🔍 Answer processed for target peer, checking connection...`)
+                // Give WebRTC a moment to establish the connection
+                setTimeout(() => {
+                  if (pigeon.value.connectionManager.peers.has(targetPeerId)) {
+                    cleanup()
+                    resolve()
+                  }
+                }, 1000)
+              }
+            }
+          }
+          
+          const cleanup = () => {
+            clearTimeout(timeout)
+            pigeon.value.off('peerConnected', onPeerConnected)
+            pigeon.value.off('statusChanged', onStatusChanged)
+          }
+          
+          pigeon.value.on('peerConnected', onPeerConnected)
+          pigeon.value.on('statusChanged', onStatusChanged)
+        })
+        
+        // Start the connection attempt (non-blocking)
+        pigeon.value.connectionManager.connectToPeer(targetPeerId).catch(err => {
+          console.error('connectToPeer error:', err)
+        })
+        
+        // Wait for connection or timeout
         console.log(`⏳ Waiting for connection to establish...`)
-        await new Promise(resolve => setTimeout(resolve, 3000))
+        await connectionPromise
         
         // Verify connection was established
         const nowConnected = pigeon.value.connectionManager.peers.has(targetPeerId)
@@ -234,6 +305,9 @@ export function usePeerPigeon() {
         if (!nowConnected) {
           throw new Error(`Failed to establish connection to peer ${targetPeerId.substring(0, 8)}`)
         }
+        
+        // Give the connection a moment to stabilize
+        await new Promise(resolve => setTimeout(resolve, 500))
       }
 
       const fileId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
@@ -243,14 +317,19 @@ export function usePeerPigeon() {
 
       // Send file metadata first
       console.log(`📤 Sending metadata to ${targetPeerId.substring(0, 8)}...`)
-      const metadataResult = await pigeon.value.sendDirectMessage(targetPeerId, {
+      const metadata = {
         type: 'file-metadata',
         fileId: fileId,
         name: file.name,
         size: file.size,
         totalChunks: totalChunks
-      })
+      }
+      console.log('📤 Metadata object:', metadata)
+      const metadataResult = await pigeon.value.sendDirectMessage(targetPeerId, metadata)
       console.log(`📤 Metadata send result:`, metadataResult)
+      
+      // Wait a moment for metadata to be received
+      await new Promise(resolve => setTimeout(resolve, 500))
 
       console.log(`Sending file: ${file.name} (${file.size} bytes) in ${totalChunks} chunks`)
 
@@ -285,6 +364,11 @@ export function usePeerPigeon() {
 
       console.log(`File sent successfully: ${file.name}`)
       sendingProgress.value = 100
+      
+      // Wait a bit to ensure all messages are delivered before closing
+      console.log('⏳ Waiting for messages to be delivered...')
+      await new Promise(resolve => setTimeout(resolve, 3000))
+      console.log('✅ File transfer complete')
       
       // Reset after a moment
       setTimeout(() => {

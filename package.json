@@ -4,12 +4,12 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite build && vite",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
-    "peerpigeon": "^1.0.2",
+    "peerpigeon": "^1.0.3",
     "vue": "^3.4.0"
   },
   "devDependencies": {
