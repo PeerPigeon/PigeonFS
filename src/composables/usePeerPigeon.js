@@ -134,8 +134,11 @@ export function usePeerPigeon() {
     try {
       console.log('📦 Handling incoming data:', { type: data?.type, from: peerId })
       
-      // Check if this is metadata or chunk data
-      if (data.type === 'file-metadata') {
+      // Check message type
+      if (data.type === 'ping') {
+        console.log('🏓 Received ping from', peerId?.substring(0, 8), ':', data.message)
+        return
+      } else if (data.type === 'file-metadata') {
         console.log('📋 Received file metadata:', data.name, data.size, 'bytes,', data.totalChunks, 'chunks')
         // Initialize a new file transfer
         const fileId = data.fileId
@@ -165,13 +168,26 @@ export function usePeerPigeon() {
         const fileIndex = receivedFiles.findIndex(f => f.id === fileId)
         
         if (buffer && fileIndex !== -1) {
-          buffer.chunks[data.chunkIndex] = data.chunk
+          // Convert received Array back to Uint8Array
+          const chunkData = data.chunk ? new Uint8Array(data.chunk) : null
+          
+          // Debug: Check if chunk has data
+          console.log(`📦 Chunk ${data.chunkIndex}: ${chunkData ? chunkData.length : 0} bytes`)
+          
+          buffer.chunks[data.chunkIndex] = chunkData
           buffer.receivedChunks++
           
-          // Update progress
+          // Update progress - calculate actual received size
+          let actualReceivedSize = 0
+          for (let i = 0; i < buffer.totalChunks; i++) {
+            if (buffer.chunks[i]) {
+              actualReceivedSize += buffer.chunks[i].length
+            }
+          }
+          
           const progress = (buffer.receivedChunks / buffer.totalChunks) * 100
           receivedFiles[fileIndex].progress = progress
-          receivedFiles[fileIndex].receivedSize = buffer.receivedChunks * CHUNK_SIZE
+          receivedFiles[fileIndex].receivedSize = actualReceivedSize
           
           // Log progress every 100 chunks
           if (buffer.receivedChunks % 100 === 0) {
@@ -204,6 +220,8 @@ export function usePeerPigeon() {
               totalSize += buffer.chunks[i].length
             }
             
+            console.log(`🔧 Assembling ${buffer.totalChunks} chunks, total size: ${totalSize} bytes`)
+            
             const completeData = new Uint8Array(totalSize)
             let offset = 0
             for (let i = 0; i < buffer.totalChunks; i++) {
@@ -213,6 +231,8 @@ export function usePeerPigeon() {
             }
             
             const blob = new Blob([completeData])
+            console.log(`🎯 Created blob: ${blob.size} bytes (type: ${blob.type})`)
+            
             receivedFiles[fileIndex].blob = blob
             receivedFiles[fileIndex].status = 'complete'
             receivedFiles[fileIndex].progress = 100
@@ -360,12 +380,18 @@ export function usePeerPigeon() {
         const chunk = file.slice(offset, offset + CHUNK_SIZE)
         const arrayBuffer = await chunk.arrayBuffer()
         const uint8Array = new Uint8Array(arrayBuffer)
+        
+        // Convert Uint8Array to Array for safe serialization
+        const chunkArray = Array.from(uint8Array)
+        
+        // Debug: Verify chunk has data
+        console.log(`📤 Sending chunk ${chunkIndex}: ${chunkArray.length} bytes`)
 
         await pigeon.value.sendDirectMessage(targetPeerId, {
           type: 'file-chunk',
           fileId: fileId,
           chunkIndex: chunkIndex,
-          chunk: uint8Array
+          chunk: chunkArray  // Send as regular Array instead of Uint8Array
         })
 
         offset += CHUNK_SIZE
@@ -418,6 +444,21 @@ export function usePeerPigeon() {
     URL.revokeObjectURL(url)
   }
 
+  // Test connectivity - send a simple ping message
+  const testConnection = async (targetPeerId) => {
+    try {
+      console.log(`🏓 Testing connection to ${targetPeerId.substring(0, 8)}...`)
+      await pigeon.value.sendDirectMessage(targetPeerId, {
+        type: 'ping',
+        message: 'Hello from sender!',
+        timestamp: Date.now()
+      })
+      console.log(`✅ Ping sent to ${targetPeerId.substring(0, 8)}`)
+    } catch (error) {
+      console.error(`❌ Failed to send ping:`, error)
+    }
+  }
+
   // Disconnect from PigeonHub
   const disconnect = () => {
     if (pigeon.value) {
@@ -438,6 +479,7 @@ export function usePeerPigeon() {
     connect,
     sendFile,
     downloadFile,
-    disconnect
+    disconnect,
+    testConnection
   }
 }

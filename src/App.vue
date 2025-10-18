@@ -362,6 +362,7 @@ const {
   sendFile,
   downloadFile,
   disconnect,
+  testConnection,
   pigeon
 } = usePeerPigeon()
 
