@@ -3,7 +3,7 @@
  * Integrates PagingStorage with PeerPigeon for seamless distributed storage
  */
 
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, markRaw } from 'vue'
 import { PagingStorage } from '../storage/PagingStorage.js'
 
 export function usePagingStorage(options = {}) {
@@ -46,7 +46,7 @@ export function usePagingStorage(options = {}) {
       console.log('Initializing PagingStorage with PeerPigeon...')
       
       // Create storage instance
-      storage.value = new PagingStorage({
+      storage.value = markRaw(new PagingStorage({
         pigeon: pigeonInstance,
         peerId: pigeonInstance.peerId || `peer_${Date.now()}`,
         pageSize: config.pageSize,
@@ -55,7 +55,7 @@ export function usePagingStorage(options = {}) {
           maxMemoryPages: config.maxMemoryPages,
           persistenceKey: `pigeonfs_${pigeonInstance.peerId || 'default'}`
         }
-      })
+      }))
       
       // Set up event handlers
       setupEventHandlers(pigeonInstance)

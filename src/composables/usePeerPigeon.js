@@ -1,4 +1,4 @@
-import { ref, reactive } from 'vue'
+import { ref, reactive, markRaw } from 'vue'
 
 // PeerPigeon is loaded globally from the browser bundle
 const { PeerPigeonMesh } = window.PeerPigeon
@@ -14,23 +14,24 @@ export function usePeerPigeon() {
   const isSending = ref(false)
 
   // Initialize PeerPigeon connection
-  const connect = async () => {
+  const connect = async (options = {}) => {
     try {
       connectionStatus.value = 'connecting'
       
       console.log('Initializing PeerPigeonMesh...')
       
-      pigeon.value = new PeerPigeonMesh({
+      pigeon.value = markRaw(new PeerPigeonMesh({
+        networkName: options.networkName || 'pigeonfs',  // Use provided networkName or default
         enableWebDHT: false,
         enableCrypto: false,
         enableDistributedStorage: false,
         maxPeers: 10,
         minPeers: 0,  // Don't require any minimum peers
-        autoConnect: false,  // Disable auto-connect
-        autoDiscovery: false,  // Disable auto-discovery to prevent unsolicited connections
+        autoConnect: true,   // Enable auto-connect to discovered peers
+        autoDiscovery: true,  // Enable auto-discovery within the network namespace
         usePigeonNS: true,  // Enable pigeonns resolver for mDNS ICE candidates
         resolveMDNS: true  // Resolve .local addresses using pigeonns
-      })
+      }))
 
       console.log('PeerPigeonMesh instance created, calling init()...')
       await pigeon.value.init()
@@ -251,18 +252,33 @@ export function usePeerPigeon() {
         const connectionPromise = new Promise((resolve, reject) => {
           const timeout = setTimeout(() => {
             cleanup()
+            console.error(`❌ Connection timeout after 20 seconds for peer ${targetPeerId.substring(0, 8)}`)
+            console.log(`🔍 Final connection check - peers map has:`, Array.from(pigeon.value.connectionManager.peers.keys()).map(id => id.substring(0, 8)))
             reject(new Error('Connection timeout after 20 seconds'))
           }, 20000)
+          
+          // Periodically check connection status as a fallback
+          const statusCheckInterval = setInterval(() => {
+            const connected = pigeon.value.connectionManager.peers.has(targetPeerId)
+            console.log(`🔄 Periodic connection check for ${targetPeerId.substring(0, 8)}: ${connected}`)
+            if (connected) {
+              console.log(`✅ Connection detected via periodic check`)
+              cleanup()
+              resolve()
+            }
+          }, 2000)
           
           const onPeerConnected = (data) => {
             console.log(`🔍 peerConnected event fired for: ${data.peerId?.substring(0, 8)}`)
             if (data.peerId === targetPeerId) {
+              console.log(`✅ Target peer connected via event`)
               cleanup()
               resolve()
             }
           }
           
           const onStatusChanged = (data) => {
+            console.log(`📡 Status change during connection:`, data)
             // Also listen for status changes that might indicate connection
             if (data.message && data.message.includes('Answer processed')) {
               const peerId = data.message.match(/[a-f0-9]{8}\.\.\./)?.[0]?.replace('...', '')
@@ -271,6 +287,7 @@ export function usePeerPigeon() {
                 // Give WebRTC a moment to establish the connection
                 setTimeout(() => {
                   if (pigeon.value.connectionManager.peers.has(targetPeerId)) {
+                    console.log(`✅ Connection confirmed after answer processing`)
                     cleanup()
                     resolve()
                   }
@@ -281,6 +298,7 @@ export function usePeerPigeon() {
           
           const cleanup = () => {
             clearTimeout(timeout)
+            clearInterval(statusCheckInterval)
             pigeon.value.off('peerConnected', onPeerConnected)
             pigeon.value.off('statusChanged', onStatusChanged)
           }
@@ -290,8 +308,9 @@ export function usePeerPigeon() {
         })
         
         // Start the connection attempt (non-blocking)
+        console.log(`🚀 Initiating connectToPeer for ${targetPeerId.substring(0, 8)}...`)
         pigeon.value.connectionManager.connectToPeer(targetPeerId).catch(err => {
-          console.error('connectToPeer error:', err)
+          console.error('❌ connectToPeer error:', err)
         })
         
         // Wait for connection or timeout

@@ -6,6 +6,26 @@
       <p>Peer-to-peer file sharing powered by PeerPigeon</p>
     </div>
 
+    <!-- Network Configuration -->
+    <div class="card" style="margin-bottom: 20px;">
+      <h3>🌐 Network Settings</h3>
+      <label style="display: block; margin-bottom: 8px; font-weight: 600; color: #333;">
+        Network Namespace:
+      </label>
+      <input 
+        v-model="networkNamespace"
+        type="text"
+        class="target-peer-input"
+        style="margin-bottom: 12px;"
+        placeholder="Enter network name (e.g., 'myproject', 'team1')"
+      />
+      <p style="margin: 0; font-size: 0.9rem; color: #666;">
+        🔒 Only peers in the same network namespace can discover and connect to each other.
+        <br>📝 Use a unique name to create a private network for your group.
+        <br><strong>Status:</strong> {{ connectionStatus }}
+      </p>
+    </div>
+
     <!-- Connection Status -->
     <div :class="['connection-status', connectionStatus]">
       <div>
@@ -348,6 +368,7 @@ const storage = usePagingStorage({
 
 const selectedFile = ref(null)
 const targetPeerId = ref('')
+const networkNamespace = ref(`pigeonfs-${Math.random().toString(36).substr(2, 6)}`)  // Default with random suffix
 const copied = ref(false)
 const sendError = ref('')
 const connectionError = ref('')
@@ -373,7 +394,7 @@ const handleConnect = async () => {
   try {
     connectionError.value = ''
     storageError.value = ''
-    await connect()
+    await connect({ networkName: networkNamespace.value })
     
     // Initialize storage when connected
     if (pigeon.value) {
@@ -605,9 +626,10 @@ watch(connectionStatus, async (newStatus) => {
   }
 })
 
-// Auto-connect on mount
+// No auto-connect - user must manually connect
 onMounted(() => {
-  handleConnect()
+  // App is ready, but not automatically connecting
+  console.log('PigeonFS app loaded - ready to connect when user chooses')
 })
 
 // Cleanup on unmount
