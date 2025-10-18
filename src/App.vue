@@ -201,10 +201,15 @@
       </div>
 
       <!-- PagingStorage Section -->
-      <div class="card">
-        <h2>💾 Distributed Storage</h2>
+      <div class="card" style="opacity: 0.6; border: 2px dashed #ffc107; background: linear-gradient(45deg, #fff9c4 25%, transparent 25%), linear-gradient(-45deg, #fff9c4 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #fff9c4 75%), linear-gradient(-45deg, transparent 75%, #fff9c4 75%); background-size: 20px 20px; background-position: 0 0, 0 10px, 10px -10px, -10px 0px;">
+        <h2>🚧 💾 Distributed Storage - Under Construction 🚧</h2>
+        <div style="background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 6px; padding: 12px; margin-bottom: 16px;">
+          <p style="margin: 0; color: #856404; font-weight: 600;">
+            ⚠️ This feature is currently under development and may not work as expected.
+          </p>
+        </div>
         <p style="margin-bottom: 16px; color: #666; font-size: 0.9rem;">
-          Store and sync data across connected peers
+          Store and sync data across connected peers (when implemented)
         </p>
 
         <!-- Storage Status -->
