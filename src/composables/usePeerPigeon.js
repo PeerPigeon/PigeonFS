@@ -3,7 +3,7 @@ import { ref, reactive, markRaw } from 'vue'
 // PeerPigeon is loaded globally from the browser bundle
 const { PeerPigeonMesh } = window.PeerPigeon
 
-const CHUNK_SIZE = 16384 // 16KB chunks for streaming
+const CHUNK_SIZE = 64 * 1024 // 64KB chunks - larger for better throughput
 
 export function usePeerPigeon() {
   const pigeon = ref(null)
@@ -12,6 +12,7 @@ export function usePeerPigeon() {
   const receivedFiles = reactive([])
   const sendingProgress = ref(0)
   const isSending = ref(false)
+  const fileTransfers = new Map() // Track active transfers
 
   // Initialize PeerPigeon connection
   const connect = async (options = {}) => {
@@ -68,42 +69,18 @@ export function usePeerPigeon() {
         pigeon.value.connect('wss://pigeonhub.fly.dev').catch(reject)
       })
 
-      // Set up message listener for incoming files
+      // Set up message listener for file transfers
       pigeon.value.on('messageReceived', (messageData) => {
-        console.log('📨 Message received event fired!', {
-          from: messageData.from?.substring(0, 8),
-          contentType: typeof messageData.content,
-          hasType: messageData.content?.type,
-          direct: messageData.direct
-        })
+        const { from, content } = messageData
         
-        // Handle the message content
+        if (!content || typeof content !== 'object') return
+        
         try {
-          handleIncomingData(messageData.content, messageData.from)
+          handleIncomingMessage(content, from)
         } catch (error) {
-          console.error('Error handling incoming data:', error)
+          console.error('Error handling message:', error)
         }
       })
-
-      // ALSO listen on the raw event emitter to debug
-      if (pigeon.value.connectionManager) {
-        console.log('Setting up direct message listener on connectionManager...')
-        pigeon.value.connectionManager.on('messageReceived', (data) => {
-          console.log('📨 Direct message from connectionManager:', data)
-        })
-      }
-      
-      // Listen for all gossip messages to debug
-      if (pigeon.value.gossipManager) {
-        console.log('Setting up gossip manager listener...')
-        pigeon.value.gossipManager.on('messageReceived', (data) => {
-          console.log('📨 Gossip message received:', {
-            from: data.from?.substring(0, 8),
-            contentType: typeof data.content,
-            hasType: data.content?.type
-          })
-        })
-      }
 
       // Listen for peer connections
       pigeon.value.on('peerConnected', (data) => {
@@ -127,302 +104,252 @@ export function usePeerPigeon() {
     }
   }
 
-  // Handle incoming data from peers
-  const fileBuffers = new Map() // Store incomplete file transfers
-
-  const handleIncomingData = (data, peerId) => {
-    try {
-      console.log('📦 Handling incoming data:', { type: data?.type, from: peerId })
-      
-      // Check message type
-      if (data.type === 'ping') {
-        console.log('🏓 Received ping from', peerId?.substring(0, 8), ':', data.message)
-        return
-      } else if (data.type === 'file-metadata') {
-        console.log('📋 Received file metadata:', data.name, data.size, 'bytes,', data.totalChunks, 'chunks')
-        // Initialize a new file transfer
-        const fileId = data.fileId
-        receivedFiles.push({
-          id: fileId,
-          name: data.name,
-          size: data.size,
-          receivedSize: 0,
-          progress: 0,
-          status: 'receiving',
-          chunks: [],
-          peerId: peerId,
-          blob: null
-        })
+  // Handle incoming messages
+  const handleIncomingMessage = (data, peerId) => {
+    const { type } = data
+    
+    switch (type) {
+      case 'ping':
+        console.log('🏓 Ping from', peerId?.substring(0, 8), ':', data.message)
+        break
         
-        fileBuffers.set(fileId, {
-          chunks: [],
-          totalChunks: data.totalChunks,
-          receivedChunks: 0
-        })
+      case 'file-start':
+        handleFileStart(data, peerId)
+        break
         
-        console.log(`Receiving file: ${data.name} (${data.size} bytes)`)
-      } else if (data.type === 'file-chunk') {
-        // Receive a file chunk
-        const fileId = data.fileId
-        const buffer = fileBuffers.get(fileId)
-        const fileIndex = receivedFiles.findIndex(f => f.id === fileId)
+      case 'file-chunk':
+        handleFileChunk(data, peerId)
+        break
         
-        if (buffer && fileIndex !== -1) {
-          // Convert received Array back to Uint8Array
-          const chunkData = data.chunk ? new Uint8Array(data.chunk) : null
-          
-          // Debug: Check if chunk has data
-          console.log(`📦 Chunk ${data.chunkIndex}: ${chunkData ? chunkData.length : 0} bytes`)
-          
-          buffer.chunks[data.chunkIndex] = chunkData
-          buffer.receivedChunks++
-          
-          // Update progress - calculate actual received size
-          let actualReceivedSize = 0
-          for (let i = 0; i < buffer.totalChunks; i++) {
-            if (buffer.chunks[i]) {
-              actualReceivedSize += buffer.chunks[i].length
-            }
-          }
-          
-          const progress = (buffer.receivedChunks / buffer.totalChunks) * 100
-          receivedFiles[fileIndex].progress = progress
-          receivedFiles[fileIndex].receivedSize = actualReceivedSize
-          
-          // Log progress every 100 chunks
-          if (buffer.receivedChunks % 100 === 0) {
-            console.log(`📥 Receiving progress: ${buffer.receivedChunks}/${buffer.totalChunks} chunks (${Math.round(progress)}%)`)
-          }
-          
-          // Check if all chunks received - verify every chunk is present
-          if (buffer.receivedChunks >= buffer.totalChunks) {
-            console.log(`📊 Received ${buffer.receivedChunks}/${buffer.totalChunks} chunks, verifying completeness...`)
-            
-            // Check for missing chunks
-            const missingChunks = []
-            for (let i = 0; i < buffer.totalChunks; i++) {
-              if (!buffer.chunks[i]) {
-                missingChunks.push(i)
-              }
-            }
-            
-            if (missingChunks.length > 0) {
-              console.error(`❌ Missing ${missingChunks.length} chunks:`, missingChunks.slice(0, 10))
-              // Don't complete - wait for missing chunks
-              return
-            }
-            
-            console.log(`✅ All chunks verified! Assembling file...`)
-            
-            // Combine all chunks into a blob
-            let totalSize = 0
-            for (let i = 0; i < buffer.totalChunks; i++) {
-              totalSize += buffer.chunks[i].length
-            }
-            
-            console.log(`🔧 Assembling ${buffer.totalChunks} chunks, total size: ${totalSize} bytes`)
-            
-            const completeData = new Uint8Array(totalSize)
-            let offset = 0
-            for (let i = 0; i < buffer.totalChunks; i++) {
-              const chunk = buffer.chunks[i]
-              completeData.set(chunk, offset)
-              offset += chunk.length
-            }
-            
-            const blob = new Blob([completeData])
-            console.log(`🎯 Created blob: ${blob.size} bytes (type: ${blob.type})`)
-            
-            receivedFiles[fileIndex].blob = blob
-            receivedFiles[fileIndex].status = 'complete'
-            receivedFiles[fileIndex].progress = 100
-            receivedFiles[fileIndex].receivedSize = totalSize
-            
-            console.log(`✅ File complete: ${receivedFiles[fileIndex].name} (${totalSize} bytes)`)
-            fileBuffers.delete(fileId)
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Error handling incoming data:', error)
+      case 'file-end':
+        handleFileEnd(data, peerId)
+        break
     }
   }
 
-  // Send a file to a peer
+  // Handle file transfer start
+  const handleFileStart = (data, peerId) => {
+    const { transferId, filename, filesize, totalChunks, mimeType } = data
+    
+    console.log(`📥 Starting file receive: ${filename} (${filesize} bytes, ${totalChunks} chunks)`)
+    
+    // Create file entry
+    const fileEntry = {
+      id: transferId,
+      name: filename,
+      size: filesize,
+      receivedSize: 0,
+      progress: 0,
+      status: 'receiving',
+      peerId: peerId,
+      blob: null
+    }
+    receivedFiles.push(fileEntry)
+    
+    // Track transfer
+    fileTransfers.set(transferId, {
+      chunks: new Array(totalChunks),
+      totalChunks,
+      receivedChunks: 0,
+      mimeType
+    })
+  }
+
+  // Handle file chunk
+  const handleFileChunk = (data, peerId) => {
+    const { transferId, chunkIndex, chunk } = data
+    
+    const transfer = fileTransfers.get(transferId)
+    const fileIndex = receivedFiles.findIndex(f => f.id === transferId)
+    
+    if (!transfer || fileIndex === -1) return
+    
+    // Store chunk as Uint8Array
+    transfer.chunks[chunkIndex] = new Uint8Array(chunk)
+    transfer.receivedChunks++
+    
+    // Update progress
+    const progress = (transfer.receivedChunks / transfer.totalChunks) * 100
+    receivedFiles[fileIndex].progress = progress
+    receivedFiles[fileIndex].receivedSize = transfer.chunks
+      .filter(c => c)
+      .reduce((sum, c) => sum + c.length, 0)
+    
+    // Log every 10%
+    if (Math.floor(progress) % 10 === 0 && Math.floor(progress) > Math.floor((progress - 10))) {
+      console.log(`� Progress: ${Math.round(progress)}%`)
+    }
+  }
+
+  // Handle file transfer end
+  const handleFileEnd = (data, peerId) => {
+    const { transferId } = data
+    
+    const transfer = fileTransfers.get(transferId)
+    const fileIndex = receivedFiles.findIndex(f => f.id === transferId)
+    
+    if (!transfer || fileIndex === -1) return
+    
+    console.log(`📦 Assembling file from ${transfer.totalChunks} chunks...`)
+    
+    // Check for missing chunks
+    const missingChunks = []
+    for (let i = 0; i < transfer.totalChunks; i++) {
+      if (!transfer.chunks[i]) {
+        missingChunks.push(i)
+      }
+    }
+    
+    if (missingChunks.length > 0) {
+      console.error(`❌ Missing ${missingChunks.length} chunks:`, missingChunks.slice(0, 10))
+      receivedFiles[fileIndex].status = 'error'
+      return
+    }
+    
+    // Assemble file
+    const totalSize = transfer.chunks.reduce((sum, chunk) => sum + chunk.length, 0)
+    const fileData = new Uint8Array(totalSize)
+    let offset = 0
+    
+    for (const chunk of transfer.chunks) {
+      fileData.set(chunk, offset)
+      offset += chunk.length
+    }
+    
+    const blob = new Blob([fileData], { type: transfer.mimeType || 'application/octet-stream' })
+    
+    receivedFiles[fileIndex].blob = blob
+    receivedFiles[fileIndex].status = 'complete'
+    receivedFiles[fileIndex].progress = 100
+    receivedFiles[fileIndex].receivedSize = blob.size
+    
+    console.log(`✅ File received: ${receivedFiles[fileIndex].name} (${blob.size} bytes)`)
+    
+    fileTransfers.delete(transferId)
+  }
+
+  // Send file using data channel with binary chunks
   const sendFile = async (file, targetPeerId) => {
     if (!pigeon.value || connectionStatus.value !== 'connected') {
-      throw new Error('Not connected to PigeonHub')
+      throw new Error('Not connected')
     }
 
-    console.log(`📤 Starting to send file: ${file.name} (${file.size} bytes) to ${targetPeerId}`)
+    console.log(`📤 Sending: ${file.name} (${file.size} bytes) to ${targetPeerId.substring(0, 8)}`)
 
     try {
       isSending.value = true
       sendingProgress.value = 0
 
-      // First, establish a peer-to-peer connection if not already connected
-      console.log(`🔗 Checking connection to peer ${targetPeerId.substring(0, 8)}...`)
+      // Ensure peer connection
       const isConnected = pigeon.value.connectionManager.peers.has(targetPeerId)
-      console.log(`🔗 Already connected: ${isConnected}`)
       
       if (!isConnected) {
-        console.log(`🔗 Establishing peer connection to ${targetPeerId.substring(0, 8)}...`)
+        console.log(`🔗 Connecting to peer...`)
         
-        // Create a promise that resolves when the peer connects
-        const connectionPromise = new Promise((resolve, reject) => {
+        await new Promise((resolve, reject) => {
           const timeout = setTimeout(() => {
             cleanup()
-            console.error(`❌ Connection timeout after 20 seconds for peer ${targetPeerId.substring(0, 8)}`)
-            console.log(`🔍 Final connection check - peers map has:`, Array.from(pigeon.value.connectionManager.peers.keys()).map(id => id.substring(0, 8)))
-            reject(new Error('Connection timeout after 20 seconds'))
+            reject(new Error('Connection timeout'))
           }, 20000)
           
-          // Periodically check connection status as a fallback
-          const statusCheckInterval = setInterval(() => {
-            const connected = pigeon.value.connectionManager.peers.has(targetPeerId)
-            console.log(`🔄 Periodic connection check for ${targetPeerId.substring(0, 8)}: ${connected}`)
-            if (connected) {
-              console.log(`✅ Connection detected via periodic check`)
-              cleanup()
-              resolve()
-            }
-          }, 2000)
-          
           const onPeerConnected = (data) => {
-            console.log(`🔍 peerConnected event fired for: ${data.peerId?.substring(0, 8)}`)
             if (data.peerId === targetPeerId) {
-              console.log(`✅ Target peer connected via event`)
               cleanup()
               resolve()
-            }
-          }
-          
-          const onStatusChanged = (data) => {
-            console.log(`📡 Status change during connection:`, data)
-            // Also listen for status changes that might indicate connection
-            if (data.message && data.message.includes('Answer processed')) {
-              const peerId = data.message.match(/[a-f0-9]{8}\.\.\./)?.[0]?.replace('...', '')
-              if (peerId && targetPeerId.startsWith(peerId)) {
-                console.log(`🔍 Answer processed for target peer, checking connection...`)
-                // Give WebRTC a moment to establish the connection
-                setTimeout(() => {
-                  if (pigeon.value.connectionManager.peers.has(targetPeerId)) {
-                    console.log(`✅ Connection confirmed after answer processing`)
-                    cleanup()
-                    resolve()
-                  }
-                }, 1000)
-              }
             }
           }
           
           const cleanup = () => {
             clearTimeout(timeout)
-            clearInterval(statusCheckInterval)
             pigeon.value.off('peerConnected', onPeerConnected)
-            pigeon.value.off('statusChanged', onStatusChanged)
           }
           
           pigeon.value.on('peerConnected', onPeerConnected)
-          pigeon.value.on('statusChanged', onStatusChanged)
         })
         
-        // Start the connection attempt (non-blocking)
-        console.log(`🚀 Initiating connectToPeer for ${targetPeerId.substring(0, 8)}...`)
-        pigeon.value.connectionManager.connectToPeer(targetPeerId).catch(err => {
-          console.error('❌ connectToPeer error:', err)
-        })
-        
-        // Wait for connection or timeout
-        console.log(`⏳ Waiting for connection to establish...`)
-        await connectionPromise
-        
-        // Verify connection was established
-        const nowConnected = pigeon.value.connectionManager.peers.has(targetPeerId)
-        console.log(`✅ Connection established: ${nowConnected}`)
-        
-        if (!nowConnected) {
-          throw new Error(`Failed to establish connection to peer ${targetPeerId.substring(0, 8)}`)
-        }
-        
-        // Give the connection a moment to stabilize
+        pigeon.value.connectionManager.connectToPeer(targetPeerId).catch(console.error)
         await new Promise(resolve => setTimeout(resolve, 500))
       }
 
-      const fileId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+      // Generate transfer ID
+      const transferId = `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
       const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
 
-      console.log(`📋 File metadata: ID=${fileId}, totalChunks=${totalChunks}`)
+      // Send file start message
+      await pigeon.value.sendDirectMessage(targetPeerId, {
+        type: 'file-start',
+        transferId,
+        filename: file.name,
+        filesize: file.size,
+        totalChunks,
+        mimeType: file.type || 'application/octet-stream'
+      })
 
-      // Send file metadata first
-      console.log(`📤 Sending metadata to ${targetPeerId.substring(0, 8)}...`)
-      const metadata = {
-        type: 'file-metadata',
-        fileId: fileId,
-        name: file.name,
-        size: file.size,
-        totalChunks: totalChunks
-      }
-      console.log('📤 Metadata object:', metadata)
-      const metadataResult = await pigeon.value.sendDirectMessage(targetPeerId, metadata)
-      console.log(`📤 Metadata send result:`, metadataResult)
+      console.log(`📤 Sending ${totalChunks} chunks...`)
+
+      // Get peer connection for direct data channel access
+      const peerConnection = pigeon.value.connectionManager.peers.get(targetPeerId)
       
-      // Wait a moment for metadata to be received
-      await new Promise(resolve => setTimeout(resolve, 500))
+      if (!peerConnection || !peerConnection.dataChannel) {
+        throw new Error('No data channel available')
+      }
 
-      console.log(`Sending file: ${file.name} (${file.size} bytes) in ${totalChunks} chunks`)
+      const dataChannel = peerConnection.dataChannel
 
-      // Read and send file in chunks
+      // Send chunks using data channel's bufferedAmount for backpressure
       let offset = 0
       let chunkIndex = 0
 
       while (offset < file.size) {
-        const chunk = file.slice(offset, offset + CHUNK_SIZE)
-        const arrayBuffer = await chunk.arrayBuffer()
-        const uint8Array = new Uint8Array(arrayBuffer)
-        
-        // Convert Uint8Array to Array for safe serialization
-        const chunkArray = Array.from(uint8Array)
-        
-        // Debug: Verify chunk has data
-        console.log(`📤 Sending chunk ${chunkIndex}: ${chunkArray.length} bytes`)
+        // Wait if buffer is getting full (backpressure handling)
+        while (dataChannel.bufferedAmount > 16 * 1024 * 1024) { // 16MB buffer limit
+          await new Promise(resolve => setTimeout(resolve, 10))
+        }
 
+        const chunkEnd = Math.min(offset + CHUNK_SIZE, file.size)
+        const chunkBlob = file.slice(offset, chunkEnd)
+        const arrayBuffer = await chunkBlob.arrayBuffer()
+        const uint8Array = new Uint8Array(arrayBuffer)
+
+        // Send chunk via direct message (will use data channel)
         await pigeon.value.sendDirectMessage(targetPeerId, {
           type: 'file-chunk',
-          fileId: fileId,
-          chunkIndex: chunkIndex,
-          chunk: chunkArray  // Send as regular Array instead of Uint8Array
+          transferId,
+          chunkIndex,
+          chunk: Array.from(uint8Array) // Convert for JSON serialization
         })
 
-        offset += CHUNK_SIZE
+        offset = chunkEnd
         chunkIndex++
         sendingProgress.value = (chunkIndex / totalChunks) * 100
 
-        // Log progress every 100 chunks
-        if (chunkIndex % 100 === 0 || chunkIndex === totalChunks) {
-          console.log(`📤 Sending progress: ${chunkIndex}/${totalChunks} chunks (${Math.round(sendingProgress.value)}%)`)
+        // Log every 10%
+        if (chunkIndex % Math.ceil(totalChunks / 10) === 0) {
+          console.log(`📤 Progress: ${Math.round(sendingProgress.value)}%`)
         }
 
-        // Small delay to prevent overwhelming the connection
-        await new Promise(resolve => setTimeout(resolve, 10))
+        // Small delay to prevent overwhelming
+        if (chunkIndex % 10 === 0) {
+          await new Promise(resolve => setTimeout(resolve, 1))
+        }
       }
 
-      console.log(`File sent successfully: ${file.name}`)
+      // Send file end message
+      await pigeon.value.sendDirectMessage(targetPeerId, {
+        type: 'file-end',
+        transferId
+      })
+
+      console.log(`✅ File sent: ${file.name}`)
       sendingProgress.value = 100
       
-      // Wait a bit to ensure all messages are delivered before closing
-      console.log('⏳ Waiting for messages to be delivered...')
-      await new Promise(resolve => setTimeout(resolve, 3000))
-      console.log('✅ File transfer complete')
-      
-      // Reset after a moment
       setTimeout(() => {
         isSending.value = false
         sendingProgress.value = 0
       }, 1000)
 
     } catch (error) {
-      console.error('Error sending file:', error)
+      console.error('❌ Error sending file:', error)
       isSending.value = false
       sendingProgress.value = 0
       throw error
@@ -466,6 +393,7 @@ export function usePeerPigeon() {
       pigeon.value = null
       connectionStatus.value = 'disconnected'
       myPeerId.value = ''
+      fileTransfers.clear()
     }
   }
 

@@ -317,7 +317,7 @@ export class PeerSynchronization {
   broadcastPageCreation(page) {
     if (!this.storage.pigeon || this.storage.peers.size === 0) return
     
-    // For new pages, we can broadcast the entire page content to replicas
+    // For new pages, broadcast the entire page content to replicas
     const pageData = {
       id: page.id,
       data: Object.fromEntries(page.data),
