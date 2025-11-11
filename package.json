@@ -1,7 +1,8 @@
 
 {
   "name": "pigeonfs",
-  "version": "1.0.6",
+  "version": "1.0.7",
+  "description": "P2P searchable datasets using PeerPigeon and Book.js radix tree",
   "type": "module",
   "scripts": {
     "dev": "vite build && vite",
@@ -15,5 +16,21 @@
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.0",
     "vite": "^6.3.6"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PeerPigeon/PigeonFS.git"
+  },
+  "keywords": [
+    "p2p",
+    "peer-to-peer",
+    "search",
+    "distributed",
+    "dataset",
+    "book.js",
+    "radix-tree",
+    "peerpigeon"
+  ],
+  "author": "PeerPigeon",
+  "license": "MIT"
 }

@@ -1139,6 +1139,7 @@ const performSearch = async () => {
     networkLatency.value = null
     
     const Book = getBook()
+    const startTime = performance.now()
     const networkStartTime = performance.now() // Track network latency
     
     // Search locally if we have the dataset loaded
@@ -1153,11 +1154,10 @@ const performSearch = async () => {
     } else {
       console.log('� No local dataset - querying peers only')
       searchTime.value = null
+      // Store the network start time for latency calculation
+      window._datasetNetworkStart = networkStartTime
     }
     
-      // Set network start time right before broadcasting
-      window._datasetNetworkStart = performance.now()
-
     // Always query connected peers using gossip protocol (even if we don't have dataset loaded locally)
     if (pigeon.value && pigeon.value.gossipManager) {
       const searchMessage = {
