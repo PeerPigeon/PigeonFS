@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>P2P Bible Search - PigeonFS</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 40px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
+        
+        .p2p-status {
+            padding: 20px 40px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e0e0e0;
+            display: flex;
+            gap: 30px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+        
+        .status-dot.connected {
+            background: #4ec9b0;
+        }
+        
+        .status-dot.connecting {
+            background: #ffa500;
+        }
+        
+        .status-dot.disconnected {
+            background: #f48771;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .peer-info {
+            font-size: 0.9em;
+            color: #666;
+        }
+        
+        .main-content {
+            display: grid;
+            grid-template-columns: 350px 1fr;
+            gap: 0;
+        }
+        
+        .sidebar {
+            background: #f8f9fa;
+            border-right: 1px solid #e0e0e0;
+            padding: 20px;
+            max-height: 700px;
+            overflow-y: auto;
+        }
+        
+        .sidebar h3 {
+            margin-bottom: 15px;
+            color: #333;
+        }
+        
+        .peer-list {
+            list-style: none;
+        }
+        
+        .peer-item {
+            padding: 12px;
+            margin-bottom: 8px;
+            background: white;
+            border-radius: 8px;
+            border-left: 3px solid #667eea;
+            font-size: 0.9em;
+        }
+        
+        .peer-id {
+            font-weight: 600;
+            color: #667eea;
+            word-break: break-all;
+            font-size: 0.85em;
+        }
+        
+        .peer-stats {
+            font-size: 0.8em;
+            color: #999;
+            margin-top: 4px;
+        }
+        
+        .search-section {
+            padding: 40px;
+        }
+        
+        .search-box {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        
+        .search-input {
+            flex: 1;
+            padding: 15px 20px;
+            font-size: 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            transition: all 0.3s;
+        }
+        
+        .search-input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        
+        .search-btn {
+            padding: 15px 40px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        
+        .search-btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+        }
+        
+        .search-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .stats {
+            padding: 20px;
+            background: #fff3cd;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: flex;
+            gap: 30px;
+            flex-wrap: wrap;
+        }
+        
+        .stat-item {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .stat-label {
+            font-size: 12px;
+            color: #666;
+            text-transform: uppercase;
+            font-weight: 600;
+        }
+        
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #333;
+        }
+        
+        .results {
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        
+        .result-item {
+            padding: 20px;
+            margin-bottom: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+            transition: all 0.2s;
+        }
+        
+        .result-item:hover {
+            background: #e9ecef;
+            transform: translateX(5px);
+        }
+        
+        .result-key {
+            font-weight: 600;
+            color: #667eea;
+            margin-bottom: 8px;
+            font-size: 1.1em;
+        }
+        
+        .result-value {
+            color: #495057;
+            line-height: 1.6;
+        }
+        
+        .result-source {
+            margin-top: 8px;
+            font-size: 0.85em;
+            color: #999;
+        }
+        
+        .highlight {
+            background: yellow;
+            font-weight: 600;
+            padding: 2px 4px;
+            border-radius: 2px;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+            font-size: 1.2em;
+            color: #666;
+        }
+        
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .info-message {
+            text-align: center;
+            padding: 60px 40px;
+            color: #999;
+        }
+        
+        .btn-small {
+            padding: 8px 16px;
+            font-size: 0.9em;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🕊️ P2P Bible Search</h1>
+            <p>Distributed peer-to-peer Bible search using PeerPigeon & Book.js</p>
+        </div>
+        
+        <div class="p2p-status">
+            <div class="status-indicator">
+                <div class="status-dot disconnected" id="statusDot"></div>
+                <span id="statusText">Connecting...</span>
+            </div>
+            <div class="peer-info">
+                <strong>Your ID:</strong> <span id="myPeerId">-</span>
+            </div>
+            <div class="peer-info">
+                <strong>Connected Peers:</strong> <span id="peerCount">0</span>
+            </div>
+            <button class="search-btn btn-small" id="loadBibleBtn" disabled>
+                Load Bible Data
+            </button>
+        </div>
+        
+        <div class="main-content">
+            <div class="sidebar">
+                <h3>📡 Connected Peers</h3>
+                <ul class="peer-list" id="peerList">
+                    <li class="info-message" style="padding: 20px;">
+                        Waiting for connections...
+                    </li>
+                </ul>
+                
+                <h3 style="margin-top: 30px;">📊 Network Stats</h3>
+                <div style="background: white; padding: 15px; border-radius: 8px; font-size: 0.9em;">
+                    <div style="margin-bottom: 8px;">
+                        <strong>Total Verses:</strong> <span id="totalVerses">0</span>
+                    </div>
+                    <div style="margin-bottom: 8px;">
+                        <strong>Indexed Words:</strong> <span id="indexedWords">0</span>
+                    </div>
+                    <div>
+                        <strong>Data Source:</strong> <span id="dataSource">None</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="search-section">
+                <div class="search-box">
+                    <input 
+                        type="text" 
+                        class="search-input" 
+                        id="searchInput" 
+                        placeholder="Search the Bible... (e.g., 'love', 'faith', 'beginning')"
+                        disabled
+                    >
+                    <button class="search-btn" id="searchBtn" onclick="performSearch()" disabled>
+                        Search
+                    </button>
+                </div>
+                
+                <div class="stats" id="stats" style="display: none;">
+                    <div class="stat-item">
+                        <span class="stat-label">Results</span>
+                        <span class="stat-value" id="resultCount">0</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Search Time</span>
+                        <span class="stat-value" id="searchTime">0ms</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Source</span>
+                        <span class="stat-value" id="searchSource">-</span>
+                    </div>
+                </div>
+                
+                <div class="results" id="results">
+                    <div class="info-message">
+                        <h2>🚀 Getting Started</h2>
+                        <p style="margin: 20px 0;">
+                            1. Click "Load Bible Data" to download and share<br>
+                            2. Connect with peers (open in another tab/device)<br>
+                            3. Search will query both local and peer data
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="../public/peerpigeon-browser.js"></script>
+    <script src="../book.js"></script>
+    <script>
+        let pigeon = null;
+        let bibleBook = null;
+        let bibleIndex = null;
+        let peers = new Map();
+        const Book = setTimeout.Book;
+
+        // Initialize PeerPigeon
+        async function initP2P() {
+            try {
+                console.log('Initializing PeerPigeon...');
+                const { PeerPigeonMesh } = window.PeerPigeon;
+                
+                pigeon = new PeerPigeonMesh({
+                    networkName: 'pigeonfs-bible',
+                    enableWebDHT: false,
+                    enableCrypto: false,
+                    maxPeers: 10,
+                    autoConnect: true,
+                    autoDiscovery: true
+                });
+
+                await pigeon.init();
+                
+                pigeon.on('statusChanged', (data) => {
+                    updateStatus(data.status);
+                    if (data.peerId) {
+                        document.getElementById('myPeerId').textContent = data.peerId.substring(0, 8) + '...';
+                    }
+                });
+
+                pigeon.on('peerConnected', (peer) => {
+                    console.log('Peer connected:', peer.peerId);
+                    peers.set(peer.peerId, peer);
+                    updatePeerList();
+                    
+                    // Request Bible data if we don't have it
+                    if (!bibleBook) {
+                        requestBibleFromPeer(peer);
+                    }
+                });
+
+                pigeon.on('peerDisconnected', (peerId) => {
+                    console.log('Peer disconnected:', peerId);
+                    peers.delete(peerId);
+                    updatePeerList();
+                });
+
+                pigeon.on('message', handlePeerMessage);
+
+                updateStatus('connected');
+                document.getElementById('loadBibleBtn').disabled = false;
+                
+            } catch (error) {
+                console.error('P2P initialization failed:', error);
+                updateStatus('error');
+            }
+        }
+
+        function updateStatus(status) {
+            const dot = document.getElementById('statusDot');
+            const text = document.getElementById('statusText');
+            
+            dot.className = 'status-dot ' + status;
+            
+            const statusTexts = {
+                'connected': 'Connected to Network',
+                'connecting': 'Connecting...',
+                'disconnected': 'Disconnected',
+                'error': 'Connection Error'
+            };
+            
+            text.textContent = statusTexts[status] || status;
+        }
+
+        function updatePeerList() {
+            const list = document.getElementById('peerList');
+            document.getElementById('peerCount').textContent = peers.size;
+            
+            if (peers.size === 0) {
+                list.innerHTML = '<li class="info-message" style="padding: 20px;">Waiting for connections...</li>';
+                return;
+            }
+            
+            list.innerHTML = Array.from(peers.values()).map(peer => `
+                <li class="peer-item">
+                    <div class="peer-id">${peer.peerId.substring(0, 16)}...</div>
+                    <div class="peer-stats">Connected</div>
+                </li>
+            `).join('');
+        }
+
+        async function loadBible() {
+            document.getElementById('loadBibleBtn').disabled = true;
+            document.getElementById('loadBibleBtn').textContent = 'Loading...';
+            
+            try {
+                const response = await fetch('https://raw.githubusercontent.com/thiagobodruk/bible/refs/heads/master/json/en_kjv.json');
+                const data = await response.json();
+                
+                bibleBook = Book();
+                let count = 0;
+                
+                data.forEach(book => {
+                    const bookName = book.name;
+                    book.chapters.forEach((chapter, chapterIndex) => {
+                        chapter.forEach((verse, verseIndex) => {
+                            const key = `${bookName} ${chapterIndex + 1}:${verseIndex + 1}`;
+                            bibleBook.set(key, verse);
+                            count++;
+                        });
+                    });
+                });
+                
+                document.getElementById('totalVerses').textContent = count.toLocaleString();
+                document.getElementById('dataSource').textContent = 'Local';
+                
+                // Build index
+                bibleIndex = Book.index(bibleBook);
+                document.getElementById('indexedWords').textContent = Object.keys(bibleIndex).length.toLocaleString();
+                
+                // Enable search
+                document.getElementById('searchInput').disabled = false;
+                document.getElementById('searchBtn').disabled = false;
+                document.getElementById('loadBibleBtn').textContent = 'Bible Loaded ✓';
+                
+                // Broadcast availability to peers
+                broadcastBibleAvailability();
+                
+                showMessage('✅ Bible loaded and indexed! You can now search.');
+                
+            } catch (error) {
+                console.error('Error loading Bible:', error);
+                document.getElementById('loadBibleBtn').disabled = false;
+                document.getElementById('loadBibleBtn').textContent = 'Load Bible Data';
+                alert('Failed to load Bible data: ' + error.message);
+            }
+        }
+
+        function broadcastBibleAvailability() {
+            if (!pigeon) return;
+            
+            pigeon.broadcast({
+                type: 'bible-available',
+                verses: document.getElementById('totalVerses').textContent
+            });
+        }
+
+        function requestBibleFromPeer(peer) {
+            if (!pigeon) return;
+            
+            pigeon.sendTo(peer.peerId, {
+                type: 'request-bible',
+                message: 'Requesting Bible data'
+            });
+        }
+
+        function handlePeerMessage(data) {
+            console.log('Message from peer:', data);
+            
+            switch (data.type) {
+                case 'bible-available':
+                    console.log('Peer has Bible data with', data.verses, 'verses');
+                    break;
+                    
+                case 'request-bible':
+                    // In a real implementation, we'd send chunks of Bible data
+                    console.log('Peer requesting Bible data');
+                    break;
+                    
+                case 'search-request':
+                    handleSearchRequest(data);
+                    break;
+                    
+                case 'search-response':
+                    handleSearchResponse(data);
+                    break;
+            }
+        }
+
+        function handleSearchRequest(data) {
+            if (!bibleBook || !bibleIndex) return;
+            
+            console.log('Search request from peer:', data.query);
+            
+            // Perform local search
+            const results = Book.searchIndex(bibleIndex, data.query, { maxResults: 10 });
+            
+            // Send results back
+            pigeon.sendTo(data.fromPeer, {
+                type: 'search-response',
+                requestId: data.requestId,
+                results: results,
+                source: 'peer'
+            });
+        }
+
+        function handleSearchResponse(data) {
+            console.log('Search results from peer:', data.results.length);
+            
+            // Merge with local results
+            if (data.results.length > 0) {
+                displayPeerResults(data.results, data.source);
+            }
+        }
+
+        function performSearch() {
+            const query = document.getElementById('searchInput').value.trim();
+            if (!query) return;
+            
+            document.getElementById('stats').style.display = 'flex';
+            document.getElementById('results').innerHTML = '<div class="loading"><div class="spinner"></div><p>Searching...</p></div>';
+            
+            const startTime = performance.now();
+            let localResults = [];
+            
+            // Search locally if we have data
+            if (bibleBook && bibleIndex) {
+                localResults = Book.searchIndex(bibleIndex, query, { maxResults: 50 });
+            }
+            
+            // Also query connected peers
+            if (pigeon && peers.size > 0) {
+                const requestId = Date.now();
+                pigeon.broadcast({
+                    type: 'search-request',
+                    requestId: requestId,
+                    query: query,
+                    fromPeer: pigeon.peerId
+                });
+            }
+            
+            const searchTime = (performance.now() - startTime).toFixed(2);
+            displayResults(localResults, query, searchTime, 'local');
+        }
+
+        function displayResults(results, query, searchTime, source) {
+            document.getElementById('resultCount').textContent = results.length;
+            document.getElementById('searchTime').textContent = searchTime + 'ms';
+            document.getElementById('searchSource').textContent = source;
+            
+            if (results.length === 0) {
+                document.getElementById('results').innerHTML = `
+                    <div class="info-message">
+                        <h2>No results found</h2>
+                        <p>Try a different search term</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            const html = results.map(r => `
+                <div class="result-item">
+                    <div class="result-key">${r.key}</div>
+                    <div class="result-value">${highlightText(r.value, query)}</div>
+                    <div class="result-source">Source: ${source}</div>
+                </div>
+            `).join('');
+            
+            document.getElementById('results').innerHTML = html;
+        }
+
+        function displayPeerResults(results, source) {
+            const existing = document.getElementById('results').innerHTML;
+            const html = results.map(r => `
+                <div class="result-item">
+                    <div class="result-key">${r.key}</div>
+                    <div class="result-value">${r.value}</div>
+                    <div class="result-source">Source: ${source}</div>
+                </div>
+            `).join('');
+            
+            document.getElementById('results').innerHTML += html;
+            
+            // Update count
+            const current = parseInt(document.getElementById('resultCount').textContent);
+            document.getElementById('resultCount').textContent = current + results.length;
+        }
+
+        function highlightText(text, query) {
+            if (!text || !query) return text;
+            const regex = new RegExp(`(${escapeRegex(query)})`, 'gi');
+            return text.replace(regex, '<span class="highlight">$1</span>');
+        }
+
+        function escapeRegex(str) {
+            return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+
+        function showMessage(msg) {
+            document.getElementById('results').innerHTML = `
+                <div class="info-message">
+                    <p>${msg}</p>
+                </div>
+            `;
+        }
+
+        // Event listeners
+        document.getElementById('searchInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') performSearch();
+        });
+
+        document.getElementById('loadBibleBtn').addEventListener('click', loadBible);
+
+        // Initialize on load
+        window.addEventListener('load', initP2P);
+    </script>
+</body>
+</html>

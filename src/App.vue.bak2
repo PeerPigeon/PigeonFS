@@ -1,0 +1,1475 @@
+<template>
+  <div class="container">
+    <!-- Header -->
+    <div class="header">
+      <h1><img src="./assets/pigeonlogo.jpg" alt="PigeonFS" style="height: 1.5em; vertical-align: middle; border-radius: 8px; margin-right: 8px;" /> <span style="color: black;">PigeonFS</span></h1>
+      <p>Peer-to-peer file sharing powered by PeerPigeon</p>
+    </div>
+
+    <!-- Network Configuration -->
+    <div class="card" style="margin-bottom: 20px;">
+      <h3>🌐 Network Settings</h3>
+      <label style="display: block; margin-bottom: 8px; font-weight: 600; color: #333;">
+        Network Namespace:
+      </label>
+      <input 
+        v-model="networkNamespace"
+        type="text"
+        class="target-peer-input"
+        style="margin-bottom: 12px;"
+        placeholder="Enter network name (e.g., 'myproject', 'team1')"
+      />
+      <p style="margin: 0; font-size: 0.9rem; color: #666;">
+        🔒 Only peers in the same network namespace can discover and connect to each other.
+        <br>📝 Use a unique name to create a private network for your group.
+        <br><strong>Status:</strong> {{ connectionStatus }}
+      </p>
+    </div>
+
+    <!-- Connection Status -->
+    <div :class="['connection-status', connectionStatus]">
+      <div>
+        <strong>Status:</strong>
+        <span v-if="connectionStatus === 'connected'"> ✅ Connected to PigeonHub</span>
+        <span v-else-if="connectionStatus === 'connecting'"> 🔄 Connecting...</span>
+        <span v-else> ❌ Disconnected</span>
+      </div>
+      <button 
+        v-if="connectionStatus === 'disconnected'" 
+        @click="handleConnect"
+        class="send-button"
+        style="width: auto; padding: 8px 16px;"
+      >
+        Connect
+      </button>
+      <button 
+        v-else-if="connectionStatus === 'connected'" 
+        @click="disconnect"
+        class="send-button"
+        style="width: auto; padding: 8px 16px; background: #dc3545;"
+      >
+        Disconnect
+      </button>
+    </div>
+
+    <!-- Connection Error -->
+    <div v-if="connectionError" style="color: #dc3545; margin-top: 12px; padding: 16px; background: #f8d7da; border-radius: 8px; border: 1px solid #f5c6cb;">
+      ❌ {{ connectionError }}
+    </div>
+
+    <!-- My Peer ID -->
+    <div v-if="connectionStatus === 'connected'" class="peer-id">
+      <div style="flex: 1;">
+        <label style="display: block; margin-bottom: 4px; font-weight: 600; color: #333;">
+          Your Peer ID:
+        </label>
+        <input 
+          :value="myPeerId" 
+          readonly 
+          style="width: 100%;"
+          ref="peerIdInput"
+        />
+      </div>
+      <button @click="copyPeerId">
+        {{ copied ? '✓ Copied!' : '📋 Copy' }}
+      </button>
+    </div>
+
+    <!-- Main Content - Send and Receive -->
+    <div v-if="connectionStatus === 'connected'" class="main-content">
+      <!-- Send File Section -->
+      <div class="card">
+        <h2>📤 Send File</h2>
+        
+        <div class="file-input-wrapper">
+          <input 
+            type="file" 
+            id="file-input" 
+            @change="handleFileSelect"
+            ref="fileInput"
+          />
+          <label 
+            for="file-input" 
+            :class="['file-input-label', { 'has-file': selectedFile }]"
+          >
+            <div v-if="!selectedFile">
+              <div style="font-size: 3rem; margin-bottom: 12px;">📁</div>
+              <div style="font-weight: 600; margin-bottom: 4px;">Click to select a file</div>
+              <div style="font-size: 0.9rem; color: #666;">or drag and drop</div>
+            </div>
+            <div v-else>
+              <div style="font-size: 3rem; margin-bottom: 12px;">📄</div>
+              <div style="font-weight: 600; margin-bottom: 4px;">{{ selectedFile.name }}</div>
+              <div style="font-size: 0.9rem; color: #666;">{{ formatFileSize(selectedFile.size) }}</div>
+            </div>
+          </label>
+        </div>
+
+        <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+          <input 
+            v-model="targetPeerId"
+            type="text"
+            class="target-peer-input"
+            style="margin-bottom: 0;"
+            placeholder="Enter recipient's Peer ID"
+            :disabled="isSending"
+            @paste.stop
+          />
+          <button 
+            @click="pasteFromClipboard"
+            class="send-button"
+            style="width: auto; padding: 8px 16px;"
+            :disabled="isSending"
+          >
+            📋 Paste
+          </button>
+        </div>
+
+        <button 
+          @click="handleSendFile"
+          class="send-button"
+          :disabled="!selectedFile || !targetPeerId || isSending"
+        >
+          {{ isSending ? 'Sending...' : '🚀 Send File' }}
+        </button>
+
+        <div v-if="isSending" class="progress-bar">
+          <div 
+            class="progress-bar-fill" 
+            :style="{ width: sendingProgress + '%' }"
+          ></div>
+        </div>
+        <div v-if="isSending" style="text-align: center; margin-top: 8px; color: #666;">
+          {{ Math.round(sendingProgress) }}% complete
+        </div>
+
+        <div v-if="sendError" style="color: #dc3545; margin-top: 12px; padding: 12px; background: #f8d7da; border-radius: 8px;">
+          ❌ {{ sendError }}
+        </div>
+      </div>
+
+      <!-- Receive Files Section -->
+      <div class="card">
+        <h2>📥 Received Files</h2>
+        
+        <div v-if="receivedFiles.length === 0" class="empty-state">
+          <div class="empty-state-icon">📭</div>
+          <div>No files received yet</div>
+          <div style="font-size: 0.9rem; margin-top: 8px;">
+            Share your Peer ID to receive files
+          </div>
+        </div>
+
+        <ul v-else class="file-list">
+          <li 
+            v-for="file in receivedFiles" 
+            :key="file.id"
+            class="file-item"
+          >
+            <div class="file-item-header">
+              <div>
+                <div class="file-name">{{ file.name }}</div>
+                <div class="file-size">{{ formatFileSize(file.size) }}</div>
+              </div>
+            </div>
+
+            <div v-if="file.status === 'receiving'" class="progress-bar">
+              <div 
+                class="progress-bar-fill" 
+                :style="{ width: file.progress + '%' }"
+              ></div>
+            </div>
+
+            <div class="file-status">
+              <span v-if="file.status === 'receiving'">
+                📡 Receiving... {{ Math.round(file.progress) }}%
+              </span>
+              <span v-else-if="file.status === 'complete'">
+                ✅ Complete
+              </span>
+            </div>
+
+            <button 
+              v-if="file.status === 'complete'"
+              @click="downloadFile(file.id)"
+              class="download-button"
+            >
+              💾 Download
+            </button>
+          </li>
+        </ul>
+      </div>
+
+      <!-- Bible Search Section -->
+      <div class="card">
+        <h2>� P2P Searchable Datasets</h2>
+        <p style="margin-bottom: 16px; color: #666; font-size: 0.9rem;">
+          Load and search datasets across connected peers using Book.js radix tree structure
+        </p>
+
+        <!-- Storage Configuration -->
+        <div style="background: #f5f5f5; border-radius: 8px; padding: 12px; margin-bottom: 16px;">
+          <div style="display: flex; align-items: center; gap: 16px; margin-bottom: 12px;">
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+              <input 
+                type="radio" 
+                v-model="dataStorageMode" 
+                value="memory"
+                :disabled="Object.keys(datasets).some(id => datasets[id].loaded)"
+              />
+              <span>💾 Memory Only</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+              <input 
+                type="radio" 
+                v-model="dataStorageMode" 
+                value="indexeddb"
+                :disabled="Object.keys(datasets).some(id => datasets[id].loaded)"
+              />
+              <span>💿 IndexedDB (Persistent)</span>
+            </label>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <label style="font-size: 0.9rem; color: #666;">Storage Quota:</label>
+            <input 
+              type="number" 
+              v-model.number="dataStorageQuota" 
+              min="1" 
+              max="500"
+              :disabled="Object.keys(datasets).some(id => datasets[id].loaded)"
+              style="width: 80px; padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px;"
+            />
+            <span style="font-size: 0.9rem; color: #666;">MB</span>
+            <span v-if="dataStorageUsed > 0" style="margin-left: auto; font-size: 0.85rem; color: #666;">
+              Used: {{ dataStorageUsed }}MB / {{ dataStorageQuota }}MB
+            </span>
+          </div>
+          <div v-if="Object.keys(datasets).some(id => datasets[id].loaded)" style="margin-top: 8px; font-size: 0.85rem; color: #666;">
+            ℹ️ Settings locked after loading. Reload page to change.
+          </div>
+        </div>
+
+        <!-- Dataset Loading Options -->
+        <div style="margin-bottom: 16px;">
+          <h3 style="font-size: 1rem; margin-bottom: 12px; color: #333;">Load Dataset:</h3>
+          
+          <!-- Pre-configured Datasets -->
+          <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-bottom: 16px;">
+            <div 
+              v-for="config in AVAILABLE_DATASETS" 
+              :key="config.id"
+              style="border: 2px solid #e5e7eb; border-radius: 8px; padding: 12px; cursor: pointer; transition: all 0.2s;"
+              :style="{ 
+                borderColor: datasets[config.id]?.loaded ? '#10b981' : '#e5e7eb',
+                background: datasets[config.id]?.loaded ? '#f0fdf4' : '#fff',
+                opacity: datasets[config.id]?.loading ? 0.6 : 1
+              }"
+              @click="!datasets[config.id]?.loaded && !datasets[config.id]?.loading && loadDatasetById(config.id)"
+            >
+              <div style="font-size: 2rem; margin-bottom: 8px;">{{ config.icon }}</div>
+              <div style="font-weight: 600; font-size: 0.9rem; margin-bottom: 4px;">{{ config.name }}</div>
+              <div style="font-size: 0.75rem; color: #666;">
+                <span v-if="datasets[config.id]?.loaded">✅ Loaded</span>
+                <span v-else-if="datasets[config.id]?.loading">⏳ Loading...</span>
+                <span v-else>Click to load</span>
+              </div>
+              <div v-if="datasets[config.id]?.loaded" style="font-size: 0.7rem; color: #10b981; margin-top: 4px;">
+                {{ datasets[config.id].itemCount.toLocaleString() }} items
+                <span v-if="datasets[config.id].loadedFromCache">💾</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Upload Custom JSON -->
+          <div style="border: 2px dashed #cbd5e1; border-radius: 8px; padding: 16px; background: #f8fafc;">
+            <h4 style="font-size: 0.9rem; margin-bottom: 8px; color: #475569;">📤 Upload Custom JSON Dataset</h4>
+            <input 
+              type="file" 
+              ref="jsonFileInput"
+              accept=".json"
+              @change="handleJsonUpload"
+              style="margin-bottom: 8px; font-size: 0.85rem;"
+            />
+            <div style="font-size: 0.75rem; color: #64748b; margin-bottom: 8px;">
+              Expected format: Array of objects with <code>key</code> and <code>value</code> fields
+            </div>
+            <details style="font-size: 0.75rem; color: #64748b;">
+              <summary style="cursor: pointer; margin-bottom: 4px;">Show example format</summary>
+              <pre style="background: #fff; padding: 8px; border-radius: 4px; overflow-x: auto; margin-top: 4px;">{{ exampleJsonFormat }}</pre>
+            </details>
+          </div>
+        </div>
+
+        <!-- Bible Stats -->
+                <!-- Bible Stats -->
+        <div v-if="datasetLoaded" style="background: #e7f3ff; border-radius: 8px; padding: 12px; margin-bottom: 16px;">
+          <div style="display: flex; justify-content: space-between; font-size: 0.9rem; margin-bottom: 4px;">
+            <span>� <strong>{{ datasetItemCount.toLocaleString() }}</strong> items loaded</span>
+            <span v-if="datasetLoadedFromCache" style="color: #10b981;">✨ From cache</span>
+            <span v-else style="color: #f59e0b;">🌐 From network</span>
+          </div>
+        </div>
+
+        <!-- Search Interface (always visible) -->
+        <div>
+          <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+            <input 
+              v-model="searchQuery"
+              type="text"
+              class="target-peer-input"
+              style="margin-bottom: 0;"
+              placeholder="Search dataset... (e.g., 'love', 'faith', 'beginning')"
+              @keyup.enter="searchDataset"
+              :disabled="searching"
+            />
+            <button 
+              @click="searchDataset"
+              class="send-button"
+              style="width: auto; padding: 8px 24px;"
+              :disabled="!searchQuery || searching"
+            >
+              🔍 Search
+            </button>
+          </div>
+
+          <!-- Search Stats -->
+          <div v-if="!datasetLoaded && !searching && !searchQuery" style="background: #e3f2fd; border-radius: 8px; padding: 12px; margin-bottom: 12px; font-size: 0.9rem; color: #1976d2;">
+            💡 <strong>Tip:</strong> You can search without loading the dataset locally - queries will be sent to connected peers who have it loaded!
+          </div>
+
+          <div v-if="searchResults.length > 0" style="background: #fff3cd; border-radius: 8px; padding: 12px; margin-bottom: 12px; font-size: 0.9rem;">
+            <span v-if="searchTime !== null">
+              Found <strong>{{ searchResults.length }}</strong> results in <strong>{{ searchTime }}ms</strong>
+              <span v-if="searchPeerResults > 0"> (+ {{ searchPeerResults }} from peers)</span>
+            </span>
+            <span v-else>
+              Found <strong>{{ searchResults.length }}</strong> results from peers
+              <span v-if="networkLatency"> in <strong>{{ networkLatency }}ms</strong> network latency</span>
+            </span>
+          </div>
+
+          <!-- Search Results -->
+          <div v-if="searchResults.length > 0" style="max-height: 400px; overflow-y: auto;">
+            <div 
+              v-for="(result, idx) in searchResults.slice(0, 20)" 
+              :key="idx"
+              style="background: #f8f9fa; padding: 12px; margin-bottom: 8px; border-radius: 8px; border-left: 3px solid #667eea;"
+            >
+              <div style="font-weight: 600; color: #667eea; margin-bottom: 4px;">
+                {{ result.key }}
+              </div>
+              <div style="color: #495057; line-height: 1.5;" v-html="highlightSearch(result.value)"></div>
+              <div v-if="result.source" style="font-size: 0.8rem; color: #999; margin-top: 4px;">
+                Source: {{ result.source }}
+              </div>
+            </div>
+            <div v-if="searchResults.length > 20" style="text-align: center; padding: 12px; color: #666;">
+              Showing 20 of {{ searchResults.length }} results
+            </div>
+          </div>
+
+          <div v-else-if="bibleSearchQuery && !bibleSearching && !bibleLoaded" style="text-align: center; padding: 40px; color: #999;">
+            <div>🔍 Waiting for results from connected peers...</div>
+            <div style="font-size: 0.9rem; margin-top: 12px;">
+              Make sure at least one peer has loaded the Bible data
+            </div>
+          </div>
+
+          <div v-else-if="bibleSearchQuery && !bibleSearching" style="text-align: center; padding: 40px; color: #999;">
+            No results found for "{{ bibleSearchQuery }}"
+          </div>
+        </div>
+      </div>
+
+      <!-- PagingStorage Section -->
+      <div class="card" style="opacity: 0.6; border: 2px dashed #ffc107; background: linear-gradient(45deg, #fff9c4 25%, transparent 25%), linear-gradient(-45deg, #fff9c4 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #fff9c4 75%), linear-gradient(-45deg, transparent 75%, #fff9c4 75%); background-size: 20px 20px; background-position: 0 0, 0 10px, 10px -10px, -10px 0px;">
+        <h2>🚧 💾 Distributed Storage - Under Construction 🚧</h2>
+        <div style="background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 6px; padding: 12px; margin-bottom: 16px;">
+          <p style="margin: 0; color: #856404; font-weight: 600;">
+            ⚠️ This feature is currently under development and may not work as expected.
+          </p>
+        </div>
+        <p style="margin-bottom: 16px; color: #666; font-size: 0.9rem;">
+          Store and sync data across connected peers (when implemented)
+        </p>
+
+        <!-- Storage Status -->
+        <div class="storage-status" style="margin-bottom: 16px;">
+          <div style="display: flex; gap: 16px; font-size: 0.9rem;">
+            <span>Status: <strong :style="{ color: storageReady ? '#28a745' : '#dc3545' }">
+              {{ storageReady ? '✅ Ready' : '❌ Not Ready' }}
+            </strong></span>
+            <span>Peers: <strong>{{ storagePeerCount }}</strong></span>
+            <span>Keys: <strong>{{ storageTotalKeys }}</strong></span>
+            <span>Pages: <strong>{{ storageTotalPages }}</strong></span>
+          </div>
+        </div>
+
+        <!-- Storage Operations -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;">
+          <div>
+            <label style="display: block; margin-bottom: 4px; font-weight: 600;">Key:</label>
+            <input 
+              v-model="storageKey" 
+              placeholder="e.g., user:123" 
+              style="width: 100%;"
+              @keyup.enter="handleStorageGet"
+            />
+          </div>
+          <div>
+            <label style="display: block; margin-bottom: 4px; font-weight: 600;">Value:</label>
+            <input 
+              v-model="storageValue" 
+              placeholder="Enter value or JSON" 
+              style="width: 100%;"
+              @keyup.enter="handleStorageSet"
+            />
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+          <button 
+            @click="handleStorageSet"
+            class="send-button"
+            style="flex: 1; padding: 8px;"
+            :disabled="!storageReady || !storageKey || !storageValue"
+          >
+            💾 Store
+          </button>
+          <button 
+            @click="handleStorageGet"
+            class="send-button"
+            style="flex: 1; padding: 8px; background: #17a2b8;"
+            :disabled="!storageReady || !storageKey"
+          >
+            🔍 Get
+          </button>
+          <button 
+            @click="handleStorageDelete"
+            class="send-button"
+            style="flex: 1; padding: 8px; background: #dc3545;"
+            :disabled="!storageReady || !storageKey"
+          >
+            🗑️ Delete
+          </button>
+        </div>
+
+        <!-- Quick Actions -->
+        <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+          <button 
+            @click="runStorageDemo"
+            class="send-button"
+            style="flex: 1; padding: 6px; background: #6f42c1; font-size: 0.85rem;"
+            :disabled="!storageReady"
+          >
+            🎯 Run Demo
+          </button>
+          <button 
+            @click="clearStorage"
+            class="send-button"
+            style="flex: 1; padding: 6px; background: #fd7e14; font-size: 0.85rem;"
+            :disabled="!storageReady"
+          >
+            🧹 Clear Cache
+          </button>
+          <button 
+            @click="exportStorage"
+            class="send-button"
+            style="flex: 1; padding: 6px; background: #20c997; font-size: 0.85rem;"
+            :disabled="!storageReady"
+          >
+            📤 Export
+          </button>
+        </div>
+
+        <!-- Storage Results -->
+        <div v-if="storageResult" class="storage-result" style="margin-bottom: 16px;">
+          <label style="display: block; margin-bottom: 4px; font-weight: 600;">Result:</label>
+          <pre style="background: #f8f9fa; padding: 12px; border-radius: 4px; font-size: 0.8rem; max-height: 150px; overflow-y: auto;">{{ storageResult }}</pre>
+        </div>
+
+        <!-- Storage Error -->
+        <div v-if="storageError" style="color: #dc3545; margin-bottom: 16px; padding: 12px; background: #f8d7da; border-radius: 8px; font-size: 0.9rem;">
+          ❌ {{ storageError }}
+        </div>
+
+        <!-- Storage Stats -->
+        <details style="margin-top: 16px;">
+          <summary style="cursor: pointer; font-weight: 600; margin-bottom: 8px;">📊 Advanced Stats</summary>
+          <div v-if="storageStats" style="font-size: 0.8rem; color: #666;">
+            <div><strong>Memory Pressure:</strong> {{ (storageMemoryPressure * 100).toFixed(1) }}%</div>
+            <div><strong>Load Balanced:</strong> {{ storageLoadBalanced ? 'Yes' : 'No' }}</div>
+            <div><strong>Average Page Size:</strong> {{ storageStats.averagePageSize?.toFixed(0) || 0 }} bytes</div>
+            <div v-if="storageStats.cache">
+              <strong>Cache:</strong> 
+              {{ storageStats.cache.memoryPages }}/{{ storageStats.cache.maxMemoryPages }} memory pages,
+              {{ storageStats.cache.dirtyPages }} dirty
+            </div>
+          </div>
+        </details>
+      </div>
+    </div>
+
+    <!-- Welcome Screen (when not connected) -->
+    <div v-else class="welcome-screen">
+      <div class="empty-state-icon">
+        <img src="./assets/pigeonlogo.jpg" alt="PigeonFS" style="width: 120px; height: 120px; border-radius: 16px;" />
+      </div>
+      <h2>Welcome to PigeonFS</h2>
+      <p>Secure peer-to-peer file sharing using WebRTC</p>
+      <button 
+        @click="handleConnect"
+        class="send-button"
+        style="width: auto; margin-top: 24px; padding: 12px 32px;"
+      >
+        🚀 Get Started
+      </button>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
+import { usePeerPigeon } from './composables/usePeerPigeon'
+import { usePagingStorage } from './composables/usePagingStorage'
+
+const {
+  myPeerId,
+  connectionStatus,
+  receivedFiles,
+  sendingProgress,
+  isSending,
+  connect,
+  sendFile,
+  downloadFile,
+  disconnect,
+  testConnection,
+  pigeon
+} = usePeerPigeon()
+
+// Generic data storage (IndexedDB)
+import {
+  saveDataset,
+  loadDataset,
+  saveDatasetIndex,
+  loadDatasetIndex,
+  saveCachedItem,
+  loadCachedItems,
+  getCacheStats,
+  clearDataset
+} from './composables/useDataStorage.js'
+
+// Book.js is loaded via script tag and sets setTimeout.Book
+// Use a getter function since Book.js loads after this module
+const getBook = () => setTimeout.Book || window.Book
+
+// PagingStorage setup
+const storage = usePagingStorage({
+  pageSize: 2048, // Smaller pages for demo
+  statsUpdateInterval: 2000
+})
+
+const selectedFile = ref(null)
+const targetPeerId = ref('')
+// Remember network namespace across sessions
+const savedNamespace = localStorage.getItem('pigeonfs_network_namespace')
+const networkNamespace = ref(savedNamespace || `pigeonfs-${Math.random().toString(36).substr(2, 6)}`)
+
+// Save namespace when it changes
+watch(networkNamespace, (newValue) => {
+  localStorage.setItem('pigeonfs_network_namespace', newValue)
+})
+
+const copied = ref(false)
+const sendError = ref('')
+const connectionError = ref('')
+const fileInput = ref(null)
+const peerIdInput = ref(null)
+
+// Storage UI state
+const storageKey = ref('')
+const storageValue = ref('')
+const storageResult = ref('')
+const storageError = ref('')
+
+// Dataset Configuration
+const AVAILABLE_DATASETS = {
+  'bible-kjv': {
+    id: 'bible-kjv',
+    name: 'King James Bible',
+    icon: '📖',
+    url: 'https://raw.githubusercontent.com/thiagobodruk/bible/refs/heads/master/json/en_kjv.json',
+    loader: (data) => {
+      // Convert Bible JSON to Book.js format
+      const entries = []
+      data.forEach(book => {
+        const bookName = book.name
+        book.chapters.forEach((chapter, chapterIndex) => {
+          chapter.forEach((verse, verseIndex) => {
+            const key = `${bookName} ${chapterIndex + 1}:${verseIndex + 1}`
+            // Store only key and value - Book.js only needs these two
+            // Additional metadata (book, chapter, verse) can be parsed from key if needed
+            entries.push({ key, value: verse })
+          })
+        })
+      })
+      return entries
+    }
+  }
+  // Future datasets can be added here:
+  // 'webster-dict': { name: 'Webster Dictionary', url: '...', loader: ... },
+  // 'wikipedia': { name: 'Wikipedia Snapshot', url: '...', loader: ... }
+}
+
+// Generic dataset state (replaces Bible-specific state)
+const datasets = ref({}) // { datasetId: { loaded, loading, book, index, itemCount, indexSize, loadedFromCache, ... } }
+const dataStorageMode = ref('indexeddb') // 'memory' or 'indexeddb'
+const dataStorageQuota = ref(500) // MB - increased default for large datasets like Bible
+const dataStorageUsed = ref(0) // MB
+
+// Search state (generic across all datasets)
+const searchQuery = ref('')
+const searchDataset = ref('bible-kjv') // Currently selected dataset for search
+const searching = ref(false)
+const searchResults = ref([])
+const searchTime = ref(0)
+const searchPeerResults = ref(0)
+const networkLatency = ref(null)
+
+// Computed properties for current dataset
+const currentDataset = computed(() => datasets.value[searchDataset.value])
+const datasetLoaded = computed(() => currentDataset.value?.loaded || false)
+const datasetLoading = computed(() => currentDataset.value?.loading || false)
+const datasetLoadedFromCache = computed(() => currentDataset.value?.loadedFromCache || false)
+const datasetBook = computed(() => currentDataset.value?.book || null)
+const datasetIndex = computed(() => currentDataset.value?.index || null)
+const datasetItemCount = computed(() => currentDataset.value?.itemCount || 0)
+const datasetIndexSize = computed(() => currentDataset.value?.indexSize || 0)
+const datasetStorageUsed = computed(() => currentDataset.value?.storageUsed || 0)
+const datasetCachedItemCount = computed(() => currentDataset.value?.cachedItemCount || 0)
+
+// JSON upload state
+const jsonFileInput = ref(null)
+const exampleJsonFormat = `[
+  { "key": "entry1", "value": "First entry text" },
+  { "key": "entry2", "value": "Second entry text" },
+  { "key": "entry3", "value": "Third entry text" }
+]`
+
+// Storage reactive properties
+const storageReady = computed(() => storage.isReady?.value || false)
+const storagePeerCount = computed(() => storage.peerCount?.value || 0)
+const storageTotalKeys = computed(() => storage.totalKeys?.value || 0)
+const storageTotalPages = computed(() => storage.totalPages?.value || 0)
+const storageMemoryPressure = computed(() => storage.memoryPressure?.value || 0)
+const storageLoadBalanced = computed(() => storage.isLoadBalanced?.value || false)
+const storageStats = computed(() => storage.stats || {})
+
+const handleConnect = async () => {
+  try {
+    connectionError.value = ''
+    storageError.value = ''
+    await connect({ networkName: networkNamespace.value })
+    
+    // Initialize storage when connected
+    if (pigeon.value) {
+      console.log('Initializing PagingStorage...')
+      await storage.initialize(pigeon.value)
+      console.log('PagingStorage ready!')
+    }
+  } catch (error) {
+    console.error('Connection failed:', error)
+    connectionError.value = error.message || 'Failed to connect to PigeonHub. Please try again.'
+  }
+}
+
+const handleFileSelect = (event) => {
+  const file = event.target.files[0]
+  if (file) {
+    selectedFile.value = file
+    sendError.value = ''
+  }
+}
+
+const handleSendFile = async () => {
+  if (!selectedFile.value || !targetPeerId.value) return
+  
+  try {
+    sendError.value = ''
+    await sendFile(selectedFile.value, targetPeerId.value)
+    
+    // Reset form
+    selectedFile.value = null
+    if (fileInput.value) {
+      fileInput.value.value = ''
+    }
+  } catch (error) {
+    console.error('Send failed:', error)
+    sendError.value = error.message || 'Failed to send file. Please check the Peer ID and try again.'
+  }
+}
+
+const copyPeerId = async () => {
+  try {
+    await navigator.clipboard.writeText(myPeerId.value)
+    copied.value = true
+    setTimeout(() => {
+      copied.value = false
+    }, 2000)
+  } catch (error) {
+    // Fallback for browsers that don't support clipboard API
+    if (peerIdInput.value) {
+      peerIdInput.value.select()
+      document.execCommand('copy')
+      copied.value = true
+      setTimeout(() => {
+        copied.value = false
+      }, 2000)
+    }
+  }
+}
+
+const pasteFromClipboard = async () => {
+  try {
+    const text = await navigator.clipboard.readText()
+    targetPeerId.value = text
+  } catch (error) {
+    console.error('Failed to paste:', error)
+    alert('Failed to paste. Please use Cmd+V or type the peer ID.')
+  }
+}
+
+const formatFileSize = (bytes) => {
+  if (bytes === 0) return '0 Bytes'
+  const k = 1024
+  const sizes = ['Bytes', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i]
+}
+
+// Storage operation handlers
+const handleStorageSet = async () => {
+  try {
+    storageError.value = ''
+    storageResult.value = ''
+    
+    if (!storageKey.value || !storageValue.value) return
+    
+    // Try to parse as JSON, fallback to string
+    let value = storageValue.value
+    try {
+      value = JSON.parse(storageValue.value)
+    } catch {
+      // Keep as string if not valid JSON
+    }
+    
+    await storage.set(storageKey.value, value)
+    storageResult.value = `✅ Stored: ${storageKey.value}`
+    
+    // Clear value after successful store
+    storageValue.value = ''
+    
+  } catch (error) {
+    console.error('Storage set error:', error)
+    storageError.value = `Failed to store: ${error.message}`
+  }
+}
+
+const handleStorageGet = async () => {
+  try {
+    storageError.value = ''
+    storageResult.value = ''
+    
+    if (!storageKey.value) return
+    
+    const value = await storage.get(storageKey.value)
+    
+    if (value !== undefined) {
+      storageResult.value = typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+      storageValue.value = storageResult.value
+    } else {
+      storageResult.value = '❌ Key not found'
+    }
+    
+  } catch (error) {
+    console.error('Storage get error:', error)
+    storageError.value = `Failed to retrieve: ${error.message}`
+  }
+}
+
+const handleStorageDelete = async () => {
+  try {
+    storageError.value = ''
+    storageResult.value = ''
+    
+    if (!storageKey.value) return
+    
+    const deleted = await storage.remove(storageKey.value)
+    
+    if (deleted) {
+      storageResult.value = `✅ Deleted: ${storageKey.value}`
+      storageValue.value = ''
+    } else {
+      storageResult.value = '❌ Key not found or already deleted'
+    }
+    
+  } catch (error) {
+    console.error('Storage delete error:', error)
+    storageError.value = `Failed to delete: ${error.message}`
+  }
+}
+
+const runStorageDemo = async () => {
+  try {
+    storageError.value = ''
+    storageResult.value = 'Running demo...'
+    
+    // Store some demo data
+    const demoData = {
+      'demo:user': { name: 'Alice', role: 'admin' },
+      'demo:config': { theme: 'dark', lang: 'en' },
+      'demo:counter': 42,
+      'demo:message': 'Hello from PagingStorage!',
+      'demo:timestamp': new Date().toISOString()
+    }
+    
+    let stored = 0
+    for (const [key, value] of Object.entries(demoData)) {
+      await storage.set(key, value)
+      stored++
+    }
+    
+    // Retrieve and display one item
+    const user = await storage.get('demo:user')
+    
+    storageResult.value = `✅ Demo complete!\nStored ${stored} items\nSample data: ${JSON.stringify(user, null, 2)}`
+    
+  } catch (error) {
+    console.error('Demo error:', error)
+    storageError.value = `Demo failed: ${error.message}`
+  }
+}
+
+const clearStorage = async () => {
+  try {
+    storageError.value = ''
+    await storage.clearCache()
+    storageResult.value = '✅ Cache cleared'
+  } catch (error) {
+    console.error('Clear error:', error)
+    storageError.value = `Failed to clear cache: ${error.message}`
+  }
+}
+
+// Generic Dataset Loading
+const loadDatasetById = async (datasetId) => {
+  const config = AVAILABLE_DATASETS[datasetId]
+  if (!config) {
+    throw new Error(`Dataset "${datasetId}" not found`)
+  }
+  
+  // Initialize dataset state
+  if (!datasets.value[datasetId]) {
+    datasets.value[datasetId] = {
+      loaded: false,
+      loading: false,
+      book: null,
+      index: null,
+      itemCount: 0,
+      indexSize: 0,
+      loadedFromCache: false
+    }
+  }
+  
+  try {
+    datasets.value[datasetId].loading = true
+    searchResults.value = []
+    
+    // Load Book.js from the global scope
+    const Book = getBook()
+    if (!Book) {
+      throw new Error('Book.js not loaded. Make sure book.js is included in index.html')
+    }
+    
+    let rawData
+    const useIndexedDB = dataStorageMode.value === 'indexeddb'
+    
+    // Try loading from IndexedDB if enabled
+    if (useIndexedDB) {
+      const cachedData = await loadDataset(datasetId)
+      const cachedIndex = await loadDatasetIndex(datasetId)
+      
+      console.log(`🔍 Loading ${datasetId}: cachedData=${cachedData?.length || 0} items, cachedIndex=${cachedIndex ? Object.keys(cachedIndex).length : 0} keys`)
+      
+      if (cachedData && cachedIndex && cachedData.length > 0) {
+        console.log(`📦 Loading ${config.name} from IndexedDB cache...`)
+        datasets.value[datasetId].loadedFromCache = true
+        
+        // Reconstruct Book.js from cached entries
+        datasets.value[datasetId].book = new (getBook())()
+        
+        cachedData.forEach(entry => {
+          datasets.value[datasetId].book.set(entry.key, entry.value)
+        })
+        
+        datasets.value[datasetId].itemCount = cachedData.length
+        datasets.value[datasetId].index = cachedIndex
+        datasets.value[datasetId].indexSize = Object.keys(cachedIndex).length
+        
+        console.log(`📦 Loaded ${cachedData.length} items from IndexedDB cache`)
+        
+        // Calculate storage used
+        const jsonSize = JSON.stringify(cachedData).length + JSON.stringify(cachedIndex).length
+        dataStorageUsed.value = (parseFloat(dataStorageUsed.value) + jsonSize / (1024 * 1024)).toFixed(2)
+        
+        datasets.value[datasetId].loaded = true
+        
+        // Broadcast availability
+        if (pigeon.value && pigeon.value.gossipManager) {
+          const availMessage = {
+            type: 'dataset-available',
+            datasetId,
+            datasetName: config.name,
+            items: datasets.value[datasetId].itemCount,
+            indexSize: datasets.value[datasetId].indexSize
+          }
+          await pigeon.value.gossipManager.broadcastMessage(JSON.stringify(availMessage), 'chat')
+          console.log(`${config.icon} Broadcasted ${config.name} availability to network`)
+        }
+        
+        datasets.value[datasetId].loading = false
+        return
+      }
+    }
+    
+    // Fetch from network
+    console.log(`🌐 Fetching ${config.name} from network...`)
+    const response = await fetch(config.url)
+    rawData = await response.json()
+    
+    // Convert using dataset-specific loader
+    const entries = config.loader(rawData)
+    
+    datasets.value[datasetId].book = new (getBook())()
+    
+    entries.forEach(entry => {
+      datasets.value[datasetId].book.set(entry.key, entry.value)
+    })
+    
+    datasets.value[datasetId].itemCount = entries.length
+    
+    // Build index for fast searching
+    datasets.value[datasetId].index = Book.index(datasets.value[datasetId].book)
+    datasets.value[datasetId].indexSize = Object.keys(datasets.value[datasetId].index).length
+    
+    // Save to IndexedDB if enabled and within quota
+    if (useIndexedDB) {
+      // Ensure entries are plain objects without functions
+      const plainEntries = entries.map(e => ({ key: e.key, value: e.value }))
+      
+      // Clean the index - ensure it's a plain object without functions
+      const plainIndex = JSON.parse(JSON.stringify(datasets.value[datasetId].index))
+      
+      const jsonSize = JSON.stringify(plainEntries).length + JSON.stringify(plainIndex).length
+      const sizeMB = jsonSize / (1024 * 1024)
+      
+      if (parseFloat(dataStorageUsed.value) + sizeMB <= dataStorageQuota.value) {
+        console.log(`💾 Saving ${config.name} data to IndexedDB...`)
+        await saveDataset(datasetId, plainEntries)
+        await saveDatasetIndex(datasetId, plainIndex)
+        dataStorageUsed.value = (parseFloat(dataStorageUsed.value) + sizeMB).toFixed(2)
+        console.log(`💾 ${config.name} cached to IndexedDB (${sizeMB.toFixed(2)}MB)`)
+      } else {
+        console.warn(`⚠️ ${config.name} (${sizeMB.toFixed(2)}MB) exceeds remaining quota - not caching`)
+      }
+    }
+    
+    datasets.value[datasetId].loaded = true
+    
+    // Broadcast availability
+    if (pigeon.value && pigeon.value.gossipManager) {
+      const availMessage = {
+        type: 'dataset-available',
+        datasetId,
+        datasetName: config.name,
+        items: datasets.value[datasetId].itemCount,
+        indexSize: datasets.value[datasetId].indexSize
+      }
+      await pigeon.value.gossipManager.broadcastMessage(JSON.stringify(availMessage), 'chat')
+      console.log(`${config.icon} Broadcasted ${config.name} availability to network`)
+    }
+    
+  } catch (error) {
+    console.error(`Error loading ${config.name}:`, error)
+    alert(`Failed to load ${config.name}: ${error.message}`)
+  } finally {
+    datasets.value[datasetId].loading = false
+  }
+}
+
+// Legacy Bible loader (wrapper for backwards compatibility)
+const loadBible = () => loadDatasetById('bible-kjv')
+
+// JSON Upload Handler
+const handleJsonUpload = async (event) => {
+  const file = event.target.files?.[0]
+  if (!file) return
+  
+  try {
+    const text = await file.text()
+    const data = JSON.parse(text)
+    
+    // Validate format
+    if (!Array.isArray(data)) {
+      alert('Invalid format: JSON must be an array of objects')
+      return
+    }
+    
+    if (data.length === 0) {
+      alert('Empty dataset')
+      return
+    }
+    
+    // Check if entries have key/value fields
+    const hasValidFormat = data.every(item => 
+      item && typeof item === 'object' && 'key' in item && 'value' in item
+    )
+    
+    if (!hasValidFormat) {
+      alert('Invalid format: Each object must have "key" and "value" fields\n\nExample:\n' + exampleJsonFormat)
+      return
+    }
+    
+    // Generate dataset ID from filename
+    const datasetId = `custom-${file.name.replace(/\.json$/i, '').toLowerCase().replace(/[^a-z0-9]/g, '-')}`
+    const datasetName = file.name.replace(/\.json$/i, '')
+    
+    // Add to available datasets
+    AVAILABLE_DATASETS[datasetId] = {
+      id: datasetId,
+      name: datasetName,
+      icon: '📄',
+      url: null, // Custom uploaded file
+      loader: (rawData) => rawData // Already in correct format
+    }
+    
+    // Initialize dataset state
+    datasets.value[datasetId] = {
+      loaded: false,
+      loading: true,
+      book: null,
+      index: null,
+      itemCount: 0,
+      indexSize: 0,
+      loadedFromCache: false
+    }
+    
+    // Load Book.js
+    const Book = getBook()
+    if (!Book) {
+      throw new Error('Book.js not loaded')
+    }
+    
+    // Create Book.js instance and populate
+    datasets.value[datasetId].book = new (getBook())()
+    
+    data.forEach(entry => {
+      datasets.value[datasetId].book.set(entry.key, entry.value)
+    })
+    
+    datasets.value[datasetId].itemCount = data.length
+    
+    // Build index
+    datasets.value[datasetId].index = Book.index(datasets.value[datasetId].book)
+    datasets.value[datasetId].indexSize = Object.keys(datasets.value[datasetId].index).length
+    
+    // Save to IndexedDB if enabled
+    if (dataStorageMode.value === 'indexeddb') {
+      const jsonSize = JSON.stringify(data).length + JSON.stringify(datasets.value[datasetId].index).length
+      const sizeMB = jsonSize / (1024 * 1024)
+      
+      if (parseFloat(dataStorageUsed.value) + sizeMB <= dataStorageQuota.value) {
+        await saveDataset(datasetId, data)
+        await saveDatasetIndex(datasetId, datasets.value[datasetId].index)
+        dataStorageUsed.value = (parseFloat(dataStorageUsed.value) + sizeMB).toFixed(2)
+        console.log(`💾 Saved custom dataset "${datasetName}" to IndexedDB (${sizeMB.toFixed(2)}MB)`)
+      } else {
+        console.warn(`⚠️ Dataset exceeds quota - loaded in memory only`)
+      }
+    }
+    
+    datasets.value[datasetId].loaded = true
+    datasets.value[datasetId].loading = false
+    
+    // Broadcast availability
+    if (pigeon.value && pigeon.value.gossipManager) {
+      const availMessage = {
+        type: 'dataset-available',
+        datasetId,
+        datasetName,
+        items: datasets.value[datasetId].itemCount,
+        indexSize: datasets.value[datasetId].indexSize
+      }
+      await pigeon.value.gossipManager.broadcastMessage(JSON.stringify(availMessage), 'chat')
+      console.log(`📄 Broadcasted custom dataset "${datasetName}" availability to network`)
+    }
+    
+    alert(`✅ Successfully loaded "${datasetName}" with ${data.length.toLocaleString()} items!`)
+    
+    // Clear input
+    if (jsonFileInput.value) {
+      jsonFileInput.value.value = ''
+    }
+    
+  } catch (error) {
+    console.error('JSON upload error:', error)
+    alert(`Failed to load JSON: ${error.message}`)
+    
+    // Clear input
+    if (jsonFileInput.value) {
+      jsonFileInput.value.value = ''
+    }
+  }
+}
+
+const searchBible = async () => {
+  if (!bibleSearchQuery.value) return
+  
+  try {
+    bibleSearching.value = true
+    bibleSearchResults.value = []
+    bibleSearchPeerResults.value = 0
+    bibleNetworkLatency.value = null
+    
+    const Book = getBook()
+    const startTime = performance.now()
+    const networkStartTime = performance.now() // Track network latency
+    
+    // Search locally if we have the Bible loaded
+    if (bibleBook.value && bibleIndex.value) {
+      const results = Book.searchIndex(bibleIndex.value, bibleSearchQuery.value, { maxResults: 50 })
+      
+      const elapsed = performance.now() - startTime
+      // Always format as string to preserve decimal places
+      bibleSearchTime.value = elapsed < 1 ? elapsed.toFixed(2) : Math.round(elapsed).toString()
+      bibleSearchResults.value = results.map(r => ({ ...r, source: 'local' }))
+      console.log(`📖 Local search found ${results.length} results in ${bibleSearchTime.value}ms`)
+    } else {
+      console.log('📖 No local Bible data - querying peers only')
+      bibleSearchTime.value = null
+      // Store the network start time for latency calculation
+      window._bibleNetworkStart = networkStartTime
+    }
+    
+    // Always query connected peers using gossip protocol (even if we don't have Bible loaded locally)
+    if (pigeon.value && pigeon.value.gossipManager) {
+      const searchMessage = {
+        type: 'bible-search-request',
+        query: bibleSearchQuery.value,
+        requestId: Date.now()
+      }
+      
+      console.log('📡 Broadcasting Bible search request via gossip:', searchMessage)
+      // Stringify the message for gossip protocol
+      await pigeon.value.gossipManager.broadcastMessage(JSON.stringify(searchMessage), 'chat')
+      console.log('📡 Search request broadcasted to network')
+    } else {
+      console.warn('⚠️ Cannot broadcast - gossip manager not ready')
+    }
+    
+  } catch (error) {
+    console.error('Search error:', error)
+    alert('Search failed: ' + error.message)
+  } finally {
+    bibleSearching.value = false
+  }
+}
+
+const highlightSearch = (text) => {
+  if (!bibleSearchQuery.value || !text) return text
+  const regex = new RegExp(`(${escapeRegex(bibleSearchQuery.value)})`, 'gi')
+  return text.replace(regex, '<span style="background: yellow; font-weight: 600; padding: 2px 4px; border-radius: 2px;">$1</span>')
+}
+
+const escapeRegex = (str) => {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+// Handle dataset search messages from peers
+const setupDatasetMessageHandlers = () => {
+  if (!pigeon.value) {
+    console.warn('⚠️ Cannot setup dataset handlers - pigeon not initialized')
+    return
+  }
+  
+  console.log('� Setting up dataset search message handlers...')
+  
+  pigeon.value.on('messageReceived', (messageData) => {
+    console.log('📨 RAW MESSAGE RECEIVED:', messageData)
+    
+    const { from, content } = messageData
+    
+    // Parse JSON string content from gossip messages
+    let parsedContent = content
+    if (typeof content === 'string') {
+      try {
+        parsedContent = JSON.parse(content)
+      } catch (e) {
+        console.log('📨 Ignoring non-JSON string content')
+        return
+      }
+    }
+    
+    if (!parsedContent || typeof parsedContent !== 'object') {
+      console.log('📨 Ignoring non-object content:', typeof parsedContent)
+      return
+    }
+    
+    console.log('📨 Received message:', parsedContent.type, 'from', from?.substring(0, 8))
+    
+    // Check if we can serve from full Bible or cached data
+    const canServeSearch = (bibleBook.value && bibleIndex.value) || window._bibleCache
+    
+    if (parsedContent.type === 'bible-search-request' && canServeSearch) {
+      // Peer is requesting search results - serve from full Bible or cache
+      const source = bibleBook.value ? 'full Bible' : 'cache'
+      console.log(`📖 Processing Bible search request from ${source}: "${parsedContent.query}"`)
+      const Book = getBook()
+      
+      let results
+      if (bibleBook.value && bibleIndex.value) {
+        // We have full Bible - use index search
+        results = Book.searchIndex(bibleIndex.value, parsedContent.query, { maxResults: 10 })
+      } else if (window._bibleCache) {
+        // We only have cached verses - search through them
+        results = window._bibleCache.search(parsedContent.query)
+        console.log(`📦 Searched cache, found ${results.length} matching verses`)
+      }
+      
+      if (results && results.length > 0) {
+        // Broadcast response back via gossip so it reaches the requester and network
+        const responseMessage = {
+          type: 'bible-search-response',
+          requestId: parsedContent.requestId,
+          results: results,
+          query: parsedContent.query
+        }
+        
+        // Stringify for gossip protocol
+        pigeon.value.gossipManager.broadcastMessage(JSON.stringify(responseMessage), 'chat')
+        console.log(`📖 Broadcasted ${results.length} Bible search results to network`)
+      }
+      
+    } else if (parsedContent.type === 'bible-search-response') {
+      // Received search results from peer
+      if (parsedContent.results && parsedContent.results.length > 0) {
+        const peerResults = parsedContent.results.map(r => ({ ...r, source: 'peer' }))
+        bibleSearchResults.value = [...bibleSearchResults.value, ...peerResults]
+        bibleSearchPeerResults.value += parsedContent.results.length
+        
+        // Calculate network latency if this is the first response and we don't have local Bible
+        if (window._bibleNetworkStart && bibleNetworkLatency.value === null) {
+          const latency = performance.now() - window._bibleNetworkStart
+          bibleNetworkLatency.value = latency < 1 ? latency.toFixed(2) : Math.round(latency).toString()
+          delete window._bibleNetworkStart
+        }
+        
+        // Cache received verses to contribute to network robustness
+        if (!bibleBook.value) {
+          // Initialize Book.js if not already done
+          if (!window._bibleCache) {
+            const Book = window.setTimeout?.Book
+            window._bibleCache = new Book()
+            console.log('� Initialized Bible cache for received verses')
+          }
+          
+          // Add each verse to the cache
+          parsedContent.results.forEach(async (verse) => {
+            const key = `${verse.book} ${verse.chapter}:${verse.verse}`
+            window._bibleCache.set(key, verse.text)
+            
+            // Persist to IndexedDB if enabled
+            if (bibleStorageMode.value === 'indexeddb') {
+              try {
+                const verseSize = JSON.stringify(verse).length / (1024 * 1024)
+                if (parseFloat(bibleStorageUsed.value) + verseSize <= bibleStorageQuota.value) {
+                  await saveCachedItem('bible-kjv', verse)
+                  bibleCachedVerseCount.value++
+                  bibleStorageUsed.value = (parseFloat(bibleStorageUsed.value) + verseSize).toFixed(2)
+                } else {
+                  console.warn('⚠️ Storage quota exceeded - not caching verse to IndexedDB')
+                }
+              } catch (err) {
+                console.warn('Failed to save verse to IndexedDB:', err)
+              }
+            } else {
+              bibleCachedVerseCount.value++
+            }
+          })
+          
+          const storageInfo = bibleStorageMode.value === 'indexeddb' ? ' (saved to IndexedDB)' : ' (memory only)'
+          console.log(`📖 Received and cached ${parsedContent.results.length} verses from peer${storageInfo}`)
+        }
+      }
+    } else if (parsedContent.type === 'bible-search-request' && !bibleBook.value) {
+      console.log('📖 Ignoring search request - Bible not loaded locally')
+    }
+  })
+  
+  console.log('✅ Dataset search handlers ready')
+}
+
+// Setup dataset handlers when connected
+console.log('🔧 Setting up watch for connection status, current value:', connectionStatus.value)
+
+watch(connectionStatus, (status) => {
+  console.log('📡 Connection status changed to:', status)
+  if (status === 'connected') {
+    setupDatasetMessageHandlers()
+  }
+})
+
+// Also setup handlers immediately if already connected
+console.log('🔍 Checking if already connected:', connectionStatus.value)
+if (connectionStatus.value === 'connected') {
+  console.log('✅ Already connected, setting up handlers now')
+  setupDatasetMessageHandlers()
+}
+
+const exportStorage = async () => {
+  try {
+    storageError.value = ''
+    const exported = storage.exportData()
+    
+    if (exported && exported.totalKeys > 0) {
+      // Create downloadable file
+      const blob = new Blob([JSON.stringify(exported, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `pigeonfs-storage-${exported.peerId}-${Date.now()}.json`
+      a.click()
+      URL.revokeObjectURL(url)
+      
+      storageResult.value = `✅ Exported ${exported.totalKeys} keys to file`
+    } else {
+      storageResult.value = '❌ No data to export'
+    }
+    
+  } catch (error) {
+    console.error('Export error:', error)
+    storageError.value = `Failed to export: ${error.message}`
+  }
+}
+
+// Watch for connection status changes
+watch(connectionStatus, async (newStatus) => {
+  if (newStatus === 'connected' && pigeon.value && !storage.isReady?.value) {
+    try {
+      console.log('Auto-initializing PagingStorage...')
+      await storage.initialize(pigeon.value)
+      console.log('PagingStorage auto-initialized!')
+    } catch (error) {
+      console.error('Failed to auto-initialize storage:', error)
+      storageError.value = `Storage initialization failed: ${error.message}`
+    }
+  }
+})
+
+// No auto-connect - user must manually connect
+onMounted(async () => {
+  // App is ready, but not automatically connecting
+  console.log('PigeonFS app loaded - ready to connect when user chooses')
+  
+  // Wait for Book.js to be available (it's loaded via script tag)
+  let Book = window.Book || setTimeout.Book
+  if (!Book) {
+    console.log('Waiting for Book.js to load...')
+    // Poll for Book.js with timeout
+    for (let i = 0; i < 50; i++) {
+      await new Promise(resolve => setTimeout(resolve, 100))
+      if (window.Book || setTimeout.Book) {
+        Book = window.Book || setTimeout.Book
+        console.log('Book.js loaded successfully')
+        break
+      }
+    }
+    if (!Book) {
+      console.error('Book.js failed to load after 5 seconds')
+      return
+    }
+  }
+  
+  // Check for stored datasets in IndexedDB if enabled
+  if (dataStorageMode.value === 'indexeddb') {
+    try {
+      
+      // Check all configured datasets
+      for (const [datasetId, config] of Object.entries(AVAILABLE_DATASETS)) {
+        try {
+          const cachedData = await loadDataset(datasetId)
+          const cachedIndex = await loadDatasetIndex(datasetId)
+          
+          console.log(`🔍 Checking ${datasetId}: cachedData=${cachedData?.length || 0} items, cachedIndex=${cachedIndex ? Object.keys(cachedIndex).length : 0} keys`)
+          
+          if (cachedData && cachedIndex && cachedData.length > 0) {
+            // Initialize dataset state - use the Book reference we got earlier
+            datasets.value[datasetId] = {
+              loaded: true,
+              loading: false,
+              book: new (getBook())(),
+              index: cachedIndex,
+              itemCount: cachedData.length,
+              indexSize: Object.keys(cachedIndex).length,
+              loadedFromCache: true
+            }
+            
+            // Populate Book.js
+            cachedData.forEach(entry => {
+              datasets.value[datasetId].book.set(entry.key, entry.value)
+            })
+            
+            // Calculate size
+            const jsonSize = JSON.stringify(cachedData).length + JSON.stringify(cachedIndex).length
+            const sizeMB = jsonSize / (1024 * 1024)
+            dataStorageUsed.value = (parseFloat(dataStorageUsed.value) + sizeMB).toFixed(2)
+            
+            console.log(`📦 Auto-loaded ${config.name} from IndexedDB (${cachedData.length} items, ${sizeMB.toFixed(2)}MB)`)
+          }
+        } catch (err) {
+          console.log(`No cached data for ${config.name}`)
+        }
+      }
+      
+      // Also load cached verses (partial data from peer searches)
+      const cachedVerses = await loadCachedItems('bible-kjv')
+      if (cachedVerses && cachedVerses.length > 0) {
+        window._bibleCache = new (getBook())()
+        
+        let totalSize = 0
+        cachedVerses.forEach(verse => {
+          const key = `${verse.book} ${verse.chapter}:${verse.verse}`
+          window._bibleCache.set(key, verse.text)
+          totalSize += JSON.stringify(verse).length
+        })
+        
+        bibleCachedVerseCount.value = cachedVerses.length
+        const sizeMB = totalSize / (1024 * 1024)
+        dataStorageUsed.value = (parseFloat(dataStorageUsed.value) + sizeMB).toFixed(2)
+        console.log(`📦 Loaded ${cachedVerses.length} cached verses from IndexedDB (${sizeMB.toFixed(2)}MB)`)
+      }
+      
+    } catch (err) {
+      console.warn('Failed to load cached data from IndexedDB:', err)
+    }
+  }
+})
+
+// Cleanup on unmount
+onUnmounted(async () => {
+  if (storage.isReady?.value) {
+    await storage.shutdown()
+  }
+  disconnect()
+})
+</script>

@@ -4,8 +4,13 @@ import vue from '@vitejs/plugin-vue'
 export default defineConfig({
   plugins: [vue()],
   server: {
-    host: '0.0.0.0',  // Bind to all interfaces, not just localhost
-    hmr: false,       // Disable HMR completely to avoid WebSocket conflicts
-    port: 8765        // Keep your existing port
+    host: '0.0.0.0',
+    hmr: {
+      overlay: true
+    },
+    watch: {
+      usePolling: true
+    },
+    port: 8765
   }
 })

@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Book.js Search Test</title>
+    <style>
+        body {
+            font-family: monospace;
+            padding: 20px;
+            background: #1e1e1e;
+            color: #d4d4d4;
+        }
+        h1 {
+            color: #4ec9b0;
+        }
+        .test {
+            background: #252526;
+            padding: 15px;
+            margin: 10px 0;
+            border-left: 3px solid #4ec9b0;
+        }
+        .test h3 {
+            color: #dcdcaa;
+            margin-top: 0;
+        }
+        .result {
+            color: #9cdcfe;
+            padding: 5px 0;
+        }
+        .success {
+            color: #4ec9b0;
+        }
+        .error {
+            color: #f48771;
+        }
+        .time {
+            color: #ce9178;
+        }
+    </style>
+</head>
+<body>
+    <h1>📖 Book.js Search Tests</h1>
+    <div id="output"></div>
+
+    <script src="../book.js"></script>
+    <script>
+        const output = document.getElementById('output');
+        
+        function log(html, className = '') {
+            const div = document.createElement('div');
+            div.className = `result ${className}`;
+            div.innerHTML = html;
+            output.appendChild(div);
+        }
+
+        function test(name, fn) {
+            const div = document.createElement('div');
+            div.className = 'test';
+            div.innerHTML = `<h3>${name}</h3>`;
+            output.appendChild(div);
+            
+            const start = performance.now();
+            try {
+                fn((msg, cls) => {
+                    const p = document.createElement('div');
+                    p.className = `result ${cls || ''}`;
+                    p.innerHTML = msg;
+                    div.appendChild(p);
+                });
+                const time = (performance.now() - start).toFixed(2);
+                div.innerHTML += `<div class="time">⏱️ ${time}ms</div>`;
+            } catch (e) {
+                div.innerHTML += `<div class="error">❌ Error: ${e.message}</div>`;
+            }
+        }
+
+        // Sample data
+        const testData = {
+            'Genesis 1:1': 'In the beginning God created the heaven and the earth.',
+            'John 3:16': 'For God so loved the world, that he gave his only begotten Son.',
+            'Psalm 23:1': 'The LORD is my shepherd; I shall not want.',
+            'Matthew 5:9': 'Blessed are the peacemakers: for they shall be called the children of God.',
+            'Romans 8:28': 'And we know that all things work together for good to them that love God.',
+            'Philippians 4:13': 'I can do all things through Christ which strengtheneth me.',
+            '1 Corinthians 13:4': 'Love is patient, love is kind.',
+            'Proverbs 3:5': 'Trust in the LORD with all thine heart.',
+            'Isaiah 41:10': 'Fear thou not; for I am with thee.',
+            'James 1:2': 'My brethren, count it all joy when ye fall into divers temptations.'
+        };
+
+        // Create test book
+        const Book = setTimeout.Book;
+        const testBook = Book();
+        
+        test('Setup: Add test verses', (log) => {
+            Object.keys(testData).forEach(key => {
+                testBook.set(key, testData[key]);
+            });
+            log(`✅ Added ${Object.keys(testData).length} verses`, 'success');
+        });
+
+        test('Test 1: Full-text search for "love"', (log) => {
+            const results = Book.search(testBook, 'love', { maxResults: 10 });
+            log(`Found ${results.length} results:`, 'success');
+            results.forEach(r => {
+                log(`   • ${r.key}: ${r.value.substring(0, 50)}...`);
+            });
+        });
+
+        test('Test 2: Case-sensitive search for "LORD"', (log) => {
+            const results = Book.search(testBook, 'LORD', { caseSensitive: true });
+            log(`Found ${results.length} results:`, 'success');
+            results.forEach(r => {
+                log(`   • ${r.key}`);
+            });
+        });
+
+        test('Test 3: Prefix search for "John"', (log) => {
+            const results = Book.prefix(testBook, 'John');
+            log(`Found ${results.length} results:`, 'success');
+            results.forEach(r => {
+                log(`   • ${r.key}`);
+            });
+        });
+
+        test('Test 4: Build search index', (log) => {
+            window.searchIndex = Book.index(testBook);
+            const words = Object.keys(window.searchIndex).length;
+            log(`✅ Index built with ${words} unique words`, 'success');
+        });
+
+        test('Test 5: Indexed search for "God"', (log) => {
+            const results = Book.searchIndex(window.searchIndex, 'God');
+            log(`Found ${results.length} results:`, 'success');
+            results.forEach(r => {
+                log(`   • ${r.key}: ${r.value.substring(0, 50)}...`);
+            });
+        });
+
+        test('Test 6: Multi-word indexed search', (log) => {
+            const results = Book.searchIndex(window.searchIndex, 'God love peace');
+            log(`Found ${results.length} results for "God love peace":`, 'success');
+            results.forEach(r => {
+                log(`   • ${r.key}`);
+            });
+        });
+
+        test('Test 7: Search with context highlighting', (log) => {
+            const results = Book.search(testBook, 'the', { maxResults: 3 });
+            log(`Found ${results.length} results (showing 3):`, 'success');
+            results.forEach(r => {
+                log(`   • ${r.key}`);
+                if (r.matches && r.matches.length > 0) {
+                    r.matches.slice(0, 2).forEach(m => {
+                        log(`      Context: ${m.context}`);
+                    });
+                }
+            });
+        });
+
+        test('Test 8: Empty search handling', (log) => {
+            const results = Book.search(testBook, 'xyzabc123notfound');
+            if (results.length === 0) {
+                log('✅ Correctly returned 0 results for non-existent term', 'success');
+            } else {
+                log('❌ Should have returned 0 results', 'error');
+            }
+        });
+
+        // Performance comparison
+        test('Test 9: Performance Comparison', (log) => {
+            const query = 'the';
+            
+            let start = performance.now();
+            Book.search(testBook, query, { maxResults: 100 });
+            const fullTextTime = (performance.now() - start).toFixed(2);
+            
+            start = performance.now();
+            Book.searchIndex(window.searchIndex, query, { maxResults: 100 });
+            const indexedTime = (performance.now() - start).toFixed(2);
+            
+            log(`Full-text search: ${fullTextTime}ms`);
+            log(`Indexed search: ${indexedTime}ms`);
+            const speedup = (fullTextTime / indexedTime).toFixed(1);
+            log(`✅ Indexed search is ${speedup}x faster`, 'success');
+        });
+
+        log('<h2 style="color: #4ec9b0; margin-top: 20px;">All tests completed! ✨</h2>', 'success');
+    </script>
+</body>
+</html>

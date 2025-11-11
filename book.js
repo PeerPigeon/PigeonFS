@@ -203,6 +203,164 @@ B.hash = function(s, c){ // via SO
   return c;
 }
 
+// Search functionality
+B.search = function(book, query, opts){
+	opts = opts || {};
+	var results = [], caseSensitive = opts.caseSensitive || false;
+	var maxResults = opts.maxResults || 100;
+	var q = caseSensitive ? query : query.toLowerCase();
+	var count = 0;
+	
+	// Search through all pages
+	book.list.forEach(function(page){
+		if(count >= maxResults){ return }
+		var items = sort(page);
+		items.forEach(function(item){
+			if(count >= maxResults){ return }
+			var word = item.word || B.decode(''+item) || '';
+			var value = (typeof item.is !== 'undefined') ? item.is : B.decode(slot(''+item)[1]);
+			var searchText = caseSensitive ? (word + ' ' + value) : (word + ' ' + value).toLowerCase();
+			
+			if(searchText.indexOf(q) !== -1){
+				results.push({
+					key: word,
+					value: value,
+					matches: findMatches(searchText, q, word + ' ' + value)
+				});
+				count++;
+			}
+		});
+	});
+	
+	return results;
+}
+
+function findMatches(lowerText, lowerQuery, originalText){
+	var matches = [];
+	var idx = 0;
+	while((idx = lowerText.indexOf(lowerQuery, idx)) !== -1){
+		matches.push({
+			index: idx,
+			context: getContext(originalText, idx, lowerQuery.length)
+		});
+		idx += lowerQuery.length;
+	}
+	return matches;
+}
+
+function getContext(text, index, length){
+	var contextSize = 50;
+	var start = Math.max(0, index - contextSize);
+	var end = Math.min(text.length, index + length + contextSize);
+	var pre = start > 0 ? '...' : '';
+	var post = end < text.length ? '...' : '';
+	return pre + text.substring(start, end) + post;
+}
+
+// Word-based search with inverted index
+B.index = function(book){
+	var index = {};
+	
+	book.list.forEach(function(page){
+		var items = sort(page);
+		items.forEach(function(item){
+			var word = item.word || B.decode(''+item) || '';
+			var value = (typeof item.is !== 'undefined') ? item.is : B.decode(slot(''+item)[1]);
+			var text = (word + ' ' + value).toLowerCase();
+			var words = text.split(/\s+/);
+			
+			words.forEach(function(w){
+				w = w.replace(/[^\w]/g, '');
+				if(w.length < 2){ return }
+				if(!index[w]){ index[w] = [] }
+				index[w].push({key: word, value: value});
+			});
+		});
+	});
+	
+	return index;
+}
+
+B.searchIndex = function(index, query, opts){
+	opts = opts || {};
+	var maxResults = opts.maxResults || 100;
+	var words = query.toLowerCase().split(/\s+/).map(function(w){
+		return w.replace(/[^\w]/g, '');
+	}).filter(function(w){ return w.length >= 2 });
+	
+	if(words.length === 0){ return [] }
+	
+	// For multi-word queries, find verses containing ALL words (AND logic)
+	if(words.length > 1){
+		var firstWord = words[0];
+		if(!index[firstWord]){ return [] }
+		
+		var candidates = index[firstWord];
+		var results = [];
+		
+		// Check each candidate verse to see if it contains all query words
+		for(var i = 0; i < candidates.length && results.length < maxResults; i++){
+			var item = candidates[i];
+			var fullText = (item.key + ' ' + item.value).toLowerCase();
+			var hasAll = true;
+			
+			for(var j = 1; j < words.length; j++){
+				if(fullText.indexOf(words[j]) === -1){
+					hasAll = false;
+					break;
+				}
+			}
+			
+			if(hasAll){
+				results.push(item);
+			}
+		}
+		
+		// If no exact matches, fall back to OR search (any word match)
+		if(results.length === 0){
+			var seen = {};
+			for(var w = 0; w < words.length && results.length < maxResults; w++){
+				var wordResults = index[words[w]] || [];
+				for(var i = 0; i < wordResults.length && results.length < maxResults; i++){
+					var key = wordResults[i].key;
+					if(!seen[key]){
+						seen[key] = true;
+						results.push(wordResults[i]);
+					}
+				}
+			}
+		}
+		
+		return results;
+	}
+	
+	// Single word search
+	var word = words[0];
+	if(!index[word]){ return [] }
+	
+	var results = index[word].slice(0, maxResults);
+	return results;
+}
+
+// Prefix search using the existing radix structure
+B.prefix = function(book, prefix){
+	var results = [];
+	var lower = prefix.toLowerCase();
+	
+	book.list.forEach(function(page){
+		var items = sort(page);
+		items.forEach(function(item){
+			var word = item.word || B.decode(''+item) || '';
+			if(word.toLowerCase().indexOf(lower) === 0){
+				var value = (typeof item.is !== 'undefined') ? item.is : B.decode(slot(''+item)[1]);
+				results.push({key: word, value: value});
+			}
+		});
+	});
+	
+	return results;
+}
+
 function record(key, val){ return key+B.encode(val)+"%"+key.length }
 function decord(t){
 	var o = {}, i = t.lastIndexOf("%"), c = parseFloat(t.slice(i+1));

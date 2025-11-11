@@ -64,9 +64,27 @@ export function usePeerPigeon() {
           reject(error)
         })
 
-        // Now connect to the signaling server
-        console.log('Connecting to PigeonHub server: wss://pigeonhub.fly.dev')
-        pigeon.value.connect('wss://pigeonhub.fly.dev').catch(reject)
+        // Bootstrap nodes - use primary with fallback
+        const bootstrapNodes = [
+          'wss://pigeonhub.fly.dev',      // Primary
+          'wss://pigeonhub-c.fly.dev'     // Fallback
+        ]
+        
+        // Always try primary first so all peers connect to the same server
+        const primaryNode = bootstrapNodes[0]
+        
+        console.log(`Connecting to PigeonHub server: ${primaryNode}`)
+        pigeon.value.connect(primaryNode).catch((err) => {
+          console.warn(`Failed to connect to ${primaryNode}, trying fallback...`)
+          // Try fallback node
+          const fallbackNode = bootstrapNodes[1]
+          if (fallbackNode) {
+            console.log(`Attempting connection to fallback: ${fallbackNode}`)
+            pigeon.value.connect(fallbackNode).catch(reject)
+          } else {
+            reject(err)
+          }
+        })
       })
 
       // Set up message listener for file transfers
