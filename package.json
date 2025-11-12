@@ -1,6 +1,6 @@
 {
   "name": "pigeonfs",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "P2P file sharing and searchable datasets using PeerPigeon",
   "type": "module",
   "main": "electron/main.js",
