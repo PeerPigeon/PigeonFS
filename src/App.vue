@@ -871,7 +871,7 @@ const electronServerLogs = ref([])
 const savedNamespace = localStorage.getItem('pigeonfs_network_namespace')
 const networkNamespace = ref(savedNamespace || `pigeonfs-${Math.random().toString(36).substr(2, 6)}`)
 const savedEncryption = localStorage.getItem('pigeonfs_enable_encryption')
-const enableEncryption = ref(savedEncryption === 'true')
+const enableEncryption = ref(savedEncryption !== null ? savedEncryption === 'true' : true) // Default to true
 
 // Save namespace and encryption when they change
 watch(networkNamespace, (newValue) => {

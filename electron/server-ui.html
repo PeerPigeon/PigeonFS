@@ -417,7 +417,11 @@
             const httpPort = parseInt(document.getElementById('httpPort').value) || 0;
             
             addLog('Starting server...', 'info');
-            const result = await window.electronAPI.startServer({ signalingUrl, httpPort });
+            const result = await window.electronAPI.startServer({ 
+                signalingUrl, 
+                httpPort,
+                enableCrypto: true // Enable encryption by default
+            });
             
             if (!result.success) {
                 addLog(`Failed to start: ${result.error}`, 'error');

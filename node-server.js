@@ -31,7 +31,7 @@ const Book = setTimeout.Book
 const CONFIG = {
   networkName: process.env.NETWORK_NAME || 'pigeonfs',
   dataDir: process.env.DATA_DIR || path.join(__dirname, 'data'),
-  enableCrypto: process.env.ENABLE_CRYPTO === 'true',
+  enableCrypto: process.env.ENABLE_CRYPTO !== 'false', // Default to true unless explicitly disabled
   httpPort: parseInt(process.env.HTTP_PORT || '3000'),
   bootstrapNodes: [
     'wss://pigeonhub.fly.dev',
