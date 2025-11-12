@@ -519,6 +519,7 @@
         <div>
           <div style="display: flex; gap: 8px; margin-bottom: 12px;">
             <input 
+              ref="searchInput"
               v-model="searchQuery"
               type="text"
               class="target-peer-input"
@@ -887,6 +888,7 @@ const sendError = ref('')
 const connectionError = ref('')
 const fileInput = ref(null)
 const peerIdInput = ref(null)
+const searchInput = ref(null) // Ref for dataset search input
 
 // Server file management state
 const serverUrl = ref('http://localhost:3000')
@@ -1881,6 +1883,10 @@ const handleJsonUpload = async (event) => {
 const performSearch = async () => {
   if (!searchQuery.value) return
   
+  // Save the currently focused element
+  const activeElement = document.activeElement
+  const wasSearchInputFocused = activeElement === searchInput.value
+  
   try {
     searching.value = true
     searchResults.value = []
@@ -1965,6 +1971,14 @@ const performSearch = async () => {
     alert('Search failed: ' + error.message)
   } finally {
     searching.value = false
+    
+    // Restore focus to search input if it was focused before
+    if (wasSearchInputFocused && searchInput.value) {
+      // Use nextTick to ensure DOM has updated
+      setTimeout(() => {
+        searchInput.value?.focus()
+      }, 0)
+    }
   }
 }
 
@@ -2063,9 +2077,23 @@ const setupDatasetMessageHandlers = () => {
           }
         }
       } else if (window._datasetCache?.[targetDatasetId]) {
-        // We only have cached items - search through them
-        results = window._datasetCache[targetDatasetId].search(parsedContent.query)
-        console.log(`📦 Searched cache, found ${results.length} matching items`)
+        // We only have cached items - search through the Book.js cache
+        const Book = getBook()
+        if (Book) {
+          const cacheBook = window._datasetCache[targetDatasetId]
+          const cacheIndex = Book.index(cacheBook)
+          
+          if (cacheIndex && Object.keys(cacheIndex).length > 0) {
+            results = Book.searchIndex(cacheIndex, parsedContent.query, { maxResults: 10 })
+            console.log(`📦 Searched cache (${Object.keys(cacheIndex).length} indexed words), found ${results.length} matching items`)
+          } else {
+            console.log(`📦 Cache index is empty`)
+            results = []
+          }
+        } else {
+          console.warn('Book.js not available for cache search')
+          results = []
+        }
       }
       
       if (results && results.length > 0) {
@@ -2302,7 +2330,7 @@ watch(searchQuery, (newQuery) => {
       performSearch()
     }
   }, 300)
-})
+}, { flush: 'post' }) // Run after DOM updates to avoid stealing focus
 
 // Watch file search query for real-time network file search
 let fileSearchTimeout = null
@@ -2325,7 +2353,7 @@ watch(p2pFileSearchQuery, (newQuery) => {
       searchNetworkFiles()
     }
   }, 400)
-})
+}, { flush: 'post' }) // Run after DOM updates to avoid stealing focus
 
 // No auto-connect - user must manually connect
 onMounted(async () => {
