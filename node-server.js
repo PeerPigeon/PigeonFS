@@ -180,7 +180,44 @@ class PigeonFSNode {
 
     console.log(`🔍 Search request: "${query}" in ${datasetId} from ${fromPeerId.substring(0, 8)}`)
     
-    const results = Book.searchIndex(ds.index, query, { maxResults: 10 })
+    // Try exact/prefix match first
+    let results = Book.searchIndex(ds.index, query, { maxResults: 50 })
+    
+    // If no results or few results and query looks like it might be a partial/multi-word search
+    if (results.length < 5 && query.length >= 3) {
+      const searchQuery = query.toLowerCase().trim()
+      const matchingKeys = Object.keys(ds.index).filter(key => 
+        key.includes(searchQuery) // Substring match
+      )
+      
+      if (matchingKeys.length > 0) {
+        console.log(`🔍 Found ${matchingKeys.length} substring matches, expanding search...`)
+        // Get results from all matching keys with scoring
+        const seen = new Set()
+        const expandedResults = []
+        for (const key of matchingKeys) {
+          const items = ds.index[key] || []
+          for (const item of items) {
+            if (!seen.has(item.key) && expandedResults.length < 50) {
+              seen.add(item.key)
+              // Calculate relevance score
+              const matchIndex = key.indexOf(searchQuery)
+              const score = matchIndex === 0 ? 1.0 : 
+                          matchIndex === key.length - searchQuery.length ? 0.8 : 
+                          0.6
+              expandedResults.push({
+                ...item,
+                score: score
+              })
+            }
+          }
+        }
+        // Sort by score and take top results
+        expandedResults.sort((a, b) => (b.score || 0) - (a.score || 0))
+        results = expandedResults.slice(0, 20) // Return top 20
+        console.log(`🔍 Expanded search found ${results.length} results`)
+      }
+    }
     
     if (results.length > 0) {
       const response = {

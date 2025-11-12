@@ -407,7 +407,7 @@
 
       <!-- Dataset Search Section -->
       <div class="card">
-        <h2>� P2P Searchable Datasets</h2>
+        <h2>📚 P2P Searchable Datasets</h2>
         <p style="margin-bottom: 16px; color: #666; font-size: 0.9rem;">
           Load and search datasets across connected peers using Book.js radix tree structure
         </p>
@@ -1982,6 +1982,53 @@ const performSearch = async () => {
   }
 }
 
+// Calculate match score for sorting results
+const calculateMatchScore = (result, query) => {
+  // Use existing score if available (from Book.js or substring matching)
+  if (result.score !== undefined) {
+    return result.score * 100 // Boost existing scores
+  }
+  
+  const key = result.key?.toLowerCase() || ''
+  const value = result.value?.toLowerCase() || ''
+  const queryLower = query.toLowerCase()
+  
+  let score = 0
+  
+  // Exact match in key (best)
+  if (key === queryLower) {
+    score = 1000
+  }
+  // Key starts with query (very good)
+  else if (key.startsWith(queryLower)) {
+    score = 500
+  }
+  // Key contains query as whole word
+  else if (key.includes(` ${queryLower} `) || key.includes(` ${queryLower}`) || key.includes(`${queryLower} `)) {
+    score = 300
+  }
+  // Key contains query anywhere
+  else if (key.includes(queryLower)) {
+    score = 200
+  }
+  
+  // Boost if value contains the exact query
+  if (value.includes(queryLower)) {
+    score += 50
+  }
+  
+  // Boost for multiple word matches in multi-word queries
+  const queryWords = queryLower.split(/\s+/).filter(w => w.length > 2)
+  if (queryWords.length > 1) {
+    const matchedWords = queryWords.filter(word => 
+      value.includes(word) || key.includes(word)
+    )
+    score += matchedWords.length * 20
+  }
+  
+  return score
+}
+
 const highlightSearch = (text) => {
   if (!searchQuery.value || !text) return text
   const regex = new RegExp(`(${escapeRegex(searchQuery.value)})`, 'gi')
@@ -2190,6 +2237,18 @@ const setupDatasetMessageHandlers = () => {
         const peerResults = parsedContent.results.map(r => ({ ...r, source: 'peer' }))
         searchResults.value = [...searchResults.value, ...peerResults]
         searchPeerResults.value += parsedContent.results.length
+        
+        // Sort combined results by relevance to the search query
+        const query = searchQuery.value?.toLowerCase().trim()
+        if (query) {
+          searchResults.value.sort((a, b) => {
+            // Calculate match quality for each result
+            const scoreA = calculateMatchScore(a, query)
+            const scoreB = calculateMatchScore(b, query)
+            return scoreB - scoreA // Descending order (best matches first)
+          })
+          console.log(`📊 Sorted ${searchResults.value.length} results by relevance`)
+        }
         
         // Calculate network latency if this is the first response and we don't have local Bible
         if (window._datasetNetworkStart && networkLatency.value === null) {
