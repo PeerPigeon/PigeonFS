@@ -6,6 +6,80 @@
       <p>Peer-to-peer file sharing powered by PeerPigeon</p>
     </div>
 
+    <!-- Electron Server Control (only show in Electron) -->
+    <div v-if="isElectron" class="card" style="margin-bottom: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+      <h3 style="color: white;">🖥️ Local Server Control</h3>
+      
+      <div v-if="!electronServerRunning" style="margin-bottom: 12px;">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+          <div>
+            <label style="display: block; margin-bottom: 4px; font-weight: 600; color: white;">Network Name:</label>
+            <input 
+              v-model="electronServerConfig.networkName"
+              type="text"
+              placeholder="pigeonfs"
+              style="width: 100%; padding: 8px; border-radius: 4px; border: none;"
+            />
+          </div>
+          <div>
+            <label style="display: block; margin-bottom: 4px; font-weight: 600; color: white;">HTTP Port:</label>
+            <input 
+              v-model.number="electronServerConfig.httpPort"
+              type="number"
+              placeholder="3000"
+              style="width: 100%; padding: 8px; border-radius: 4px; border: none;"
+            />
+          </div>
+        </div>
+        
+        <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px; cursor: pointer;">
+          <input 
+            type="checkbox" 
+            v-model="electronServerConfig.enableCrypto"
+            style="width: 18px; height: 18px;"
+          />
+          <span style="font-weight: 600;">🔒 Enable Encryption</span>
+        </label>
+        
+        <button 
+          @click="startElectronServer"
+          class="send-button"
+          style="width: 100%; background: white; color: #667eea; font-weight: 600;"
+        >
+          🚀 Start Local Server
+        </button>
+      </div>
+      
+      <div v-else>
+        <div style="background: rgba(255,255,255,0.2); padding: 12px; border-radius: 8px; margin-bottom: 12px;">
+          <div style="font-weight: 600; margin-bottom: 8px;">✅ Server Running</div>
+          <div style="font-size: 0.9rem; opacity: 0.9;">
+            Network: {{ electronServerConfig.networkName }}<br>
+            Port: {{ electronServerConfig.httpPort }}<br>
+            Encryption: {{ electronServerConfig.enableCrypto ? 'Enabled' : 'Disabled' }}
+          </div>
+        </div>
+        
+        <button 
+          @click="stopElectronServer"
+          class="send-button"
+          style="width: 100%; background: #dc3545; color: white; font-weight: 600;"
+        >
+          ⏹️ Stop Server
+        </button>
+      </div>
+      
+      <!-- Server Logs -->
+      <div v-if="electronServerLogs.length > 0" style="margin-top: 12px;">
+        <details>
+          <summary style="cursor: pointer; font-weight: 600; margin-bottom: 8px;">📋 Server Logs</summary>
+          <div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; max-height: 200px; overflow-y: auto; font-family: monospace; font-size: 0.75rem;">
+            <div v-for="(log, i) in electronServerLogs" :key="i">{{ log }}</div>
+          </div>
+        </details>
+      </div>
+    </div>
+
     <!-- Network Configuration -->
     <div class="card" style="margin-bottom: 20px;">
       <h3>🌐 Network Settings</h3>
@@ -18,7 +92,21 @@
         class="target-peer-input"
         style="margin-bottom: 12px;"
         placeholder="Enter network name (e.g., 'myproject', 'team1')"
+        :disabled="connectionStatus !== 'disconnected'"
       />
+      
+      <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px; cursor: pointer;">
+        <input 
+          type="checkbox" 
+          v-model="enableEncryption"
+          :disabled="connectionStatus !== 'disconnected'"
+        />
+        <span style="font-weight: 600; color: #333;">🔒 Enable End-to-End Encryption</span>
+      </label>
+      <div v-if="enableEncryption" style="background: #fef3c7; border-left: 4px solid #f59e0b; padding: 8px 12px; margin-bottom: 12px; border-radius: 4px; font-size: 0.85rem;">
+        <strong>⚠️ Encryption enabled:</strong> All messages and file transfers will be encrypted. Only peers with matching encryption settings can communicate.
+      </div>
+      
       <p style="margin: 0; font-size: 0.9rem; color: #666;">
         🔒 Only peers in the same network namespace can discover and connect to each other.
         <br>📝 Use a unique name to create a private network for your group.
@@ -200,6 +288,123 @@
         </ul>
       </div>
 
+      <!-- Server File Management Section -->
+      <div class="card" v-if="connectionStatus === 'connected'">
+        <h2>🗄️ Server File Management</h2>
+        <p style="margin-bottom: 16px; color: #666; font-size: 0.9rem;">
+          Upload files to Node.js server and search indexed files
+        </p>
+
+        <!-- Server URL Configuration -->
+        <div style="margin-bottom: 16px;">
+          <label style="display: block; margin-bottom: 4px; font-weight: 600;">Server URL:</label>
+          <input 
+            v-model="serverUrl" 
+            type="text"
+            placeholder="http://localhost:3000"
+            style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;"
+          />
+        </div>
+
+        <!-- Upload Files -->
+        <div style="border: 2px dashed #cbd5e1; border-radius: 8px; padding: 16px; margin-bottom: 16px; background: #f8fafc;">
+          <h4 style="font-size: 0.9rem; margin-bottom: 8px; color: #475569;">📤 Upload Files to Server</h4>
+          <input 
+            type="file" 
+            ref="fileUploadInput"
+            multiple
+            @change="handleServerFileUpload"
+            style="margin-bottom: 8px; font-size: 0.85rem;"
+          />
+          <div v-if="uploadingToServer" style="color: #3b82f6; font-size: 0.85rem;">⏳ Uploading...</div>
+          <div v-if="uploadError" style="color: #dc3545; font-size: 0.85rem; margin-top: 4px;">❌ {{ uploadError }}</div>
+        </div>
+
+        <!-- File Search -->
+        <div style="margin-bottom: 16px;">
+          <label style="display: block; margin-bottom: 4px; font-weight: 600;">🔍 Search Server Files:</label>
+          <div style="display: flex; gap: 8px;">
+            <input 
+              v-model="fileSearchQuery"
+              type="text"
+              placeholder="Search filenames..."
+              @keyup.enter="searchServerFiles"
+              style="flex: 1; padding: 8px; border: 1px solid #ddd; border-radius: 4px;"
+            />
+            <button 
+              @click="searchServerFiles"
+              class="send-button"
+              style="width: auto; padding: 8px 16px;"
+            >
+              Search
+            </button>
+            <button 
+              @click="loadServerFiles"
+              class="send-button"
+              style="width: auto; padding: 8px 16px; background: #6c757d;"
+            >
+              Refresh List
+            </button>
+          </div>
+        </div>
+
+        <!-- Search Results or File List -->
+        <div v-if="fileSearchResults.length > 0" style="margin-bottom: 16px;">
+          <h4 style="font-size: 0.9rem; margin-bottom: 8px;">Search Results ({{ fileSearchResults.length }}):</h4>
+          <div style="max-height: 300px; overflow-y: auto; border: 1px solid #e5e7eb; border-radius: 4px;">
+            <div 
+              v-for="result in fileSearchResults" 
+              :key="result.id"
+              style="padding: 8px 12px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;"
+            >
+              <div style="flex: 1;">
+                <div style="font-weight: 600; font-size: 0.9rem;">{{ result.name }}</div>
+                <div style="font-size: 0.75rem; color: #666;">
+                  {{ formatFileSize(result.size) }} • {{ result.type }}
+                </div>
+              </div>
+              <button 
+                @click="downloadServerFile(result)"
+                class="send-button"
+                style="width: auto; padding: 4px 12px; font-size: 0.85rem;"
+              >
+                ⬇️ Download
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Server Files List -->
+        <div v-else-if="serverFiles.length > 0" style="margin-bottom: 16px;">
+          <h4 style="font-size: 0.9rem; margin-bottom: 8px;">Server Files ({{ serverFiles.length }}):</h4>
+          <div style="max-height: 300px; overflow-y: auto; border: 1px solid #e5e7eb; border-radius: 4px;">
+            <div 
+              v-for="file in serverFiles" 
+              :key="file.id"
+              style="padding: 8px 12px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;"
+            >
+              <div style="flex: 1;">
+                <div style="font-weight: 600; font-size: 0.9rem;">{{ file.name }}</div>
+                <div style="font-size: 0.75rem; color: #666;">
+                  {{ formatFileSize(file.size) }} • {{ file.type }}
+                </div>
+              </div>
+              <button 
+                @click="downloadServerFile(file)"
+                class="send-button"
+                style="width: auto; padding: 4px 12px; font-size: 0.85rem;"
+              >
+                ⬇️ Download
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div v-else style="padding: 20px; text-align: center; color: #666; border: 1px solid #e5e7eb; border-radius: 4px;">
+          No files on server. Upload some files or check server URL.
+        </div>
+      </div>
+
       <!-- Dataset Search Section -->
       <div class="card">
         <h2>� P2P Searchable Datasets</h2>
@@ -378,6 +583,85 @@
           <div v-else-if="searchQuery && !searching" style="text-align: center; padding: 40px; color: #999;">
             No results found for "{{ searchQuery }}"
           </div>
+        </div>
+      </div>
+
+      <!-- P2P File Search Section -->
+      <div class="card">
+        <h2>📁 Search Network Files</h2>
+        <p style="margin-bottom: 16px; color: #666; font-size: 0.9rem;">
+          Search for files hosted on PigeonFS server nodes across the network
+        </p>
+
+        <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+          <input
+            v-model="p2pFileSearchQuery"
+            @keyup.enter="searchNetworkFiles"
+            type="text"
+            placeholder="Search for files..."
+            style="flex: 1;"
+          />
+          <button @click="searchNetworkFiles" :disabled="!p2pFileSearchQuery || !pigeon">
+            🔍 Search Network
+          </button>
+        </div>
+
+        <!-- Search Results -->
+        <div v-if="p2pFileSearchResults.length > 0" style="margin-top: 16px;">
+          <h4 style="font-size: 0.9rem; margin-bottom: 12px; color: #495057;">
+            Found {{ p2pFileSearchResults.length }} files on {{ uniqueFilePeers }} peer(s)
+          </h4>
+          <div
+            v-for="(file, idx) in p2pFileSearchResults.slice(0, 20)"
+            :key="idx"
+            style="background: #f8f9fa; padding: 12px; margin-bottom: 8px; border-radius: 8px; border-left: 3px solid #28a745;"
+          >
+            <div style="display: flex; justify-content: space-between; align-items: start;">
+              <div style="flex: 1;">
+                <div style="font-weight: 600; color: #28a745; margin-bottom: 4px;">
+                  {{ file.name }}
+                </div>
+                <div style="font-size: 0.85rem; color: #666;">
+                  {{ formatFileSize(file.size) }} • {{ file.type }}
+                </div>
+                <div style="font-size: 0.8rem; color: #999; margin-top: 4px;">
+                  Peer: {{ file.peerId?.substring(0, 12) }}...
+                </div>
+                <div v-if="downloadingFiles[file.id]" style="margin-top: 8px;">
+                  <div style="background: #e9ecef; border-radius: 4px; height: 20px; overflow: hidden;">
+                    <div 
+                      style="background: #28a745; height: 100%; transition: width 0.3s;"
+                      :style="{ width: downloadingFiles[file.id].progress + '%' }"
+                    ></div>
+                  </div>
+                  <div style="font-size: 0.75rem; color: #666; margin-top: 4px;">
+                    {{ downloadingFiles[file.id].progress.toFixed(1) }}% - 
+                    {{ formatFileSize(downloadingFiles[file.id].received) }} / {{ formatFileSize(file.size) }}
+                  </div>
+                </div>
+              </div>
+              <div style="display: flex; gap: 8px; align-items: start;">
+                <div style="font-size: 0.8rem; color: #666; background: #e7f5e9; padding: 4px 8px; border-radius: 4px;">
+                  Score: {{ Math.round((file.score || 0) * 100) }}%
+                </div>
+                <button 
+                  @click="downloadP2PFile(file)" 
+                  :disabled="downloadingFiles[file.id]"
+                  style="padding: 6px 12px; font-size: 0.85rem;"
+                >
+                  {{ downloadingFiles[file.id] ? '⏳ Downloading...' : '⬇ Download' }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-else-if="p2pFileSearchQuery && searchingNetworkFiles" style="text-align: center; padding: 40px; color: #999;">
+          <div>🔍 Searching network for files...</div>
+        </div>
+
+        <div v-else-if="p2pFileSearchQuery && !searchingNetworkFiles" style="text-align: center; padding: 40px; color: #999;">
+          No files found on the network for "{{ p2pFileSearchQuery }}"
         </div>
       </div>
 
@@ -571,13 +855,31 @@ const storage = usePagingStorage({
 
 const selectedFile = ref(null)
 const targetPeerId = ref('')
-// Remember network namespace across sessions
+
+// Electron integration
+const isElectron = ref(typeof window !== 'undefined' && window.electronAPI !== undefined)
+const electronServerRunning = ref(false)
+const electronServerConfig = ref({
+  networkName: 'pigeonfs',
+  httpPort: 3000,
+  enableCrypto: false,
+  dataDir: ''
+})
+const electronServerLogs = ref([])
+
+// Remember network namespace and encryption setting across sessions
 const savedNamespace = localStorage.getItem('pigeonfs_network_namespace')
 const networkNamespace = ref(savedNamespace || `pigeonfs-${Math.random().toString(36).substr(2, 6)}`)
+const savedEncryption = localStorage.getItem('pigeonfs_enable_encryption')
+const enableEncryption = ref(savedEncryption === 'true')
 
-// Save namespace when it changes
+// Save namespace and encryption when they change
 watch(networkNamespace, (newValue) => {
   localStorage.setItem('pigeonfs_network_namespace', newValue)
+})
+
+watch(enableEncryption, (newValue) => {
+  localStorage.setItem('pigeonfs_enable_encryption', newValue.toString())
 })
 
 const copied = ref(false)
@@ -585,6 +887,23 @@ const sendError = ref('')
 const connectionError = ref('')
 const fileInput = ref(null)
 const peerIdInput = ref(null)
+
+// Server file management state
+const serverUrl = ref('http://localhost:3000')
+const serverFiles = ref([])
+const serverFileIndex = ref(null)
+const serverFileBook = ref(null)
+const fileSearchQuery = ref('')
+const fileSearchResults = ref([])
+const uploadingToServer = ref(false)
+const uploadError = ref('')
+const fileUploadInput = ref(null)
+
+// P2P File Search state
+const p2pFileSearchQuery = ref('')
+const p2pFileSearchResults = ref([])
+const searchingNetworkFiles = ref(false)
+const downloadingFiles = ref({}) // { fileId: { progress, received, chunks } }
 
 // Storage UI state
 const storageKey = ref('')
@@ -669,7 +988,10 @@ const handleConnect = async () => {
   try {
     connectionError.value = ''
     storageError.value = ''
-    await connect({ networkName: networkNamespace.value })
+    await connect({ 
+      networkName: networkNamespace.value,
+      enableCrypto: enableEncryption.value 
+    })
     
     // Initialize storage when connected
     if (pigeon.value) {
@@ -682,6 +1004,375 @@ const handleConnect = async () => {
     connectionError.value = error.message || 'Failed to connect to PigeonHub. Please try again.'
   }
 }
+
+// Server file management functions
+const loadServerFiles = async () => {
+  try {
+    uploadError.value = ''
+    const response = await fetch(`${serverUrl.value}/files`)
+    
+    if (!response.ok) {
+      throw new Error(`Server returned ${response.status}: ${response.statusText}`)
+    }
+    
+    const data = await response.json()
+    
+    // Handle both array response and {files: []} response
+    serverFiles.value = Array.isArray(data) ? data : (data.files || [])
+    
+    console.log(`📁 Loaded ${serverFiles.value.length} files from server`)
+    
+    // Build Book.js index of filenames
+    if (serverFiles.value.length > 0) {
+      const Book = getBook()
+      if (Book) {
+        // Create a Book instance and add files to it
+        serverFileBook.value = Book()
+        
+        serverFiles.value.forEach(file => {
+          serverFileBook.value(file.name, JSON.stringify(file))
+        })
+        
+        // Create searchable index
+        serverFileIndex.value = Book.index(serverFileBook.value)
+        console.log(`📚 Built Book.js index for ${serverFiles.value.length} server files`)
+      }
+    }
+    
+    fileSearchResults.value = []
+  } catch (error) {
+    console.error('Failed to load server files:', error)
+    uploadError.value = `Failed to load files: ${error.message}`
+    serverFiles.value = []
+  }
+}
+
+const handleServerFileUpload = async (event) => {
+  const files = event.target.files
+  if (!files || files.length === 0) return
+  
+  uploadingToServer.value = true
+  uploadError.value = ''
+  
+  try {
+    for (const file of files) {
+      console.log(`📤 Starting P2P upload: ${file.name} (${formatSize(file.size)})`)
+      
+      // Read file as ArrayBuffer
+      const arrayBuffer = await file.arrayBuffer()
+      const buffer = new Uint8Array(arrayBuffer)
+      
+      // Split into chunks
+      const chunkSize = 64 * 1024 // 64KB chunks
+      const totalChunks = Math.ceil(buffer.length / chunkSize)
+      const fileId = `upload-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+      
+      console.log(`📦 Uploading ${totalChunks} chunks to server`)
+      
+      // Send chunks to server
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * chunkSize
+        const end = Math.min(start + chunkSize, buffer.length)
+        const chunk = Array.from(buffer.slice(start, end))
+        
+        const message = {
+          type: 'file-chunk-upload',
+          fileId,
+          fileName: file.name,
+          fileSize: file.size,
+          fileType: file.type || 'application/octet-stream',
+          chunkIndex: i,
+          chunk,
+          totalChunks,
+          isLastChunk: i === totalChunks - 1
+        }
+        
+        await pigeon.sendDirectMessage(serverPeerId.value, message)
+        
+        const progress = ((i + 1) / totalChunks * 100).toFixed(1)
+        console.log(`📤 Sent chunk ${i + 1}/${totalChunks} (${progress}%)`)
+      }
+      
+      console.log(`✅ Upload complete: ${file.name}`)
+    }
+    
+    // Reload file list after upload
+    await loadServerFiles()
+    
+    // Clear input
+    if (fileUploadInput.value) {
+      fileUploadInput.value.value = ''
+    }
+  } catch (error) {
+    console.error('Upload error:', error)
+    uploadError.value = error.message
+  } finally {
+    uploadingToServer.value = false
+  }
+}
+
+const searchServerFiles = () => {
+  if (!fileSearchQuery.value.trim()) {
+    fileSearchResults.value = []
+    return
+  }
+  
+  if (!serverFileIndex.value || !serverFileBook.value) {
+    uploadError.value = 'No file index available. Load server files first.'
+    return
+  }
+  
+  const Book = getBook()
+  if (!Book) {
+    uploadError.value = 'Book.js not loaded'
+    return
+  }
+  
+  try {
+    const results = Book.searchIndex(serverFileIndex.value, fileSearchQuery.value)
+    
+    // Parse JSON values back to file objects
+    fileSearchResults.value = results.map(r => {
+      try {
+        return JSON.parse(r.value)
+      } catch (e) {
+        return { id: r.key, name: r.key, size: 0, type: 'unknown' }
+      }
+    })
+    
+    console.log(`🔍 Found ${fileSearchResults.value.length} files matching "${fileSearchQuery.value}"`)
+  } catch (error) {
+    console.error('Search error:', error)
+    uploadError.value = 'Search failed: ' + error.message
+  }
+}
+
+// P2P Network File Search
+const searchNetworkFiles = async () => {
+  if (!pigeon.value || !p2pFileSearchQuery.value.trim()) {
+    return
+  }
+
+  const requestId = `file-search-${Date.now()}`
+  p2pFileSearchResults.value = []
+  searchingNetworkFiles.value = true
+
+  const query = p2pFileSearchQuery.value.toLowerCase()
+
+  // First, check DHT for file metadata
+  if (storage.isReady?.value) {
+    console.log(`🔍 Querying DHT for files matching "${query}"...`)
+    try {
+      // Query DHT for file metadata
+      const dhtKey = `file:${query}`
+      const fileMetadata = await storage.get(dhtKey)
+      
+      if (fileMetadata) {
+        try {
+          const file = JSON.parse(fileMetadata)
+          p2pFileSearchResults.value.push({
+            ...file,
+            score: 1.0
+          })
+          console.log(`📦 Found ${file.name} in DHT from peer ${file.peerId?.substring(0, 8)}`)
+        } catch (e) {
+          console.warn('Failed to parse DHT file metadata:', e)
+        }
+      }
+    } catch (error) {
+      console.warn('DHT query failed:', error.message)
+    }
+  }
+
+  // Also check cached peer file lists for instant results
+  if (window._peerFileCache) {
+    console.log(`🔍 Searching ${window._peerFileCache.size} cached peer file lists...`)
+    
+    window._peerFileCache.forEach((peerData, peerId) => {
+      const matchingFiles = peerData.files.filter(file => 
+        file.name.toLowerCase().includes(query)
+      )
+      
+      if (matchingFiles.length > 0) {
+        const results = matchingFiles.map(file => ({
+          ...file,
+          peerId: peerId,
+          score: file.score || 1.0 // Ensure score exists, default to 100%
+        }))
+        p2pFileSearchResults.value = [...p2pFileSearchResults.value, ...results]
+        console.log(`📦 Found ${matchingFiles.length} cached files from ${peerId.substring(0, 8)}`)
+      }
+    })
+    
+    // Deduplicate immediately after cache check
+    const deduped = new Map()
+    p2pFileSearchResults.value.forEach(file => {
+      const key = `${file.id}-${file.peerId}`
+      const existing = deduped.get(key)
+      if (!existing || (file.score || 0) > (existing.score || 0)) {
+        deduped.set(key, file)
+      }
+    })
+    p2pFileSearchResults.value = Array.from(deduped.values())
+  }
+
+  // Create search request for Book.js indexed search on peers
+  const searchRequest = {
+    type: 'file-search-request',
+    query: p2pFileSearchQuery.value,
+    requestId,
+    timestamp: Date.now()
+  }
+
+  console.log(`🔍 Broadcasting file search: "${p2pFileSearchQuery.value}"`)
+  
+  // Broadcast the search request
+  pigeon.value.gossipManager.broadcastMessage(JSON.stringify(searchRequest), 'chat')
+
+  // Set timeout to stop searching after 5 seconds
+  setTimeout(() => {
+    searchingNetworkFiles.value = false
+    
+    if (p2pFileSearchResults.value.length === 0) {
+      console.log('🔍 No files found on network')
+    } else {
+      console.log(`🔍 Search complete: ${p2pFileSearchResults.value.length} total results`)
+    }
+  }, 5000)
+}
+
+const uniqueFilePeers = computed(() => {
+  const peers = new Set(p2pFileSearchResults.value.map(f => f.peerId))
+  return peers.size
+})
+
+// P2P File Download via chunk requests
+const downloadP2PFile = async (file) => {
+  if (!pigeon.value || downloadingFiles.value[file.id]) {
+    return
+  }
+
+  console.log(`📥 Starting P2P download for ${file.name} from peer ${file.peerId}`)
+  
+  // Initialize download state
+  downloadingFiles.value[file.id] = {
+    progress: 0,
+    received: 0,
+    chunks: [],
+    totalChunks: Math.ceil(file.size / (64 * 1024)), // 64KB chunks
+    peerId: file.peerId
+  }
+
+  const CHUNK_SIZE = 64 * 1024 // 64KB
+  const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
+  
+  // Request chunks one at a time (simple implementation)
+  for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+    const chunkRequest = {
+      type: 'file-chunk-request',
+      fileId: file.id,
+      chunkIndex,
+      timestamp: Date.now()
+    }
+
+    console.log(`📥 Requesting chunk ${chunkIndex + 1}/${totalChunks}`)
+    
+    // Send chunk request directly to the peer
+    try {
+      await pigeon.value.sendDirectMessage(file.peerId, chunkRequest)
+      
+      // Wait for chunk response (with timeout)
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Chunk timeout')), 30000) // 30 second timeout
+        
+        const handler = (data) => {
+          // Check if this is the chunk we're waiting for
+          const content = data.content
+          if (data.from === file.peerId && content?.type === 'file-chunk' && 
+              content?.fileId === file.id && content?.chunkIndex === chunkIndex) {
+            clearTimeout(timeout)
+            pigeon.value.off('messageReceived', handler)
+            
+            // Convert array back to Uint8Array
+            const chunkData = new Uint8Array(content.chunk)
+            downloadingFiles.value[file.id].chunks[chunkIndex] = chunkData
+            downloadingFiles.value[file.id].received += chunkData.length
+            downloadingFiles.value[file.id].progress = (downloadingFiles.value[file.id].received / file.size) * 100
+            
+            console.log(`📥 Received chunk ${chunkIndex + 1}/${totalChunks} (${chunkData.length} bytes)`)
+            resolve()
+          }
+        }
+        
+        pigeon.value.on('messageReceived', handler)
+      })
+      
+    } catch (error) {
+      console.error(`Failed to download chunk ${chunkIndex}:`, error)
+      delete downloadingFiles.value[file.id]
+      uploadError.value = `Download failed at chunk ${chunkIndex + 1}/${totalChunks}: ${error.message}`
+      return
+    }
+  }
+
+  // All chunks received - reconstruct file
+  console.log(`✅ Downloaded all ${totalChunks} chunks`)
+  const fileBlob = new Blob(downloadingFiles.value[file.id].chunks, { type: file.type })
+  
+  // Trigger download
+  const url = URL.createObjectURL(fileBlob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = file.name
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+  
+  delete downloadingFiles.value[file.id]
+  console.log(`✅ Downloaded ${file.name} via P2P`)
+}
+
+const downloadServerFile = async (file) => {
+  try {
+    // For server files, we need to get the peer ID
+    // Check if this is from a local Electron server by looking for node announcements
+    let serverPeer = null
+    
+    // Check cached peer files for the server
+    if (window._peerFileCache) {
+      for (const [peerId, peerData] of window._peerFileCache.entries()) {
+        const hasFile = peerData.files.some(f => f.id === file.id || f.name === file.name)
+        if (hasFile) {
+          serverPeer = peerId
+          break
+        }
+      }
+    }
+    
+    if (!serverPeer) {
+      uploadError.value = 'Cannot download: Server peer not found. Make sure the Electron server is connected to the network.'
+      return
+    }
+    
+    // Use P2P chunk transfer with the found peer
+    await downloadP2PFile({ ...file, peerId: serverPeer }, serverPeer)
+  } catch (error) {
+    console.error('Download error:', error)
+    uploadError.value = 'Download failed: ' + error.message
+  }
+}
+
+// Auto-load server files when connected
+watch(connectionStatus, async (newStatus) => {
+  if (newStatus === 'connected') {
+    try {
+      await loadServerFiles()
+    } catch (error) {
+      console.log('Server not available:', error.message)
+    }
+  }
+})
 
 const handleFileSelect = (event) => {
   const file = event.target.files[0]
@@ -707,6 +1398,64 @@ const handleSendFile = async () => {
     console.error('Send failed:', error)
     sendError.value = error.message || 'Failed to send file. Please check the Peer ID and try again.'
   }
+}
+
+// Electron server control functions
+const startElectronServer = async () => {
+  if (!window.electronAPI) return
+  
+  try {
+    const result = await window.electronAPI.startServer(electronServerConfig.value)
+    if (result.success) {
+      electronServerRunning.value = true
+      electronServerLogs.value.push(`✅ Server started on port ${result.port}`)
+      
+      // Update server URL in UI to match Electron server
+      serverUrl.value = `http://localhost:${result.port}`
+    } else {
+      alert('Failed to start server: ' + result.error)
+    }
+  } catch (error) {
+    alert('Error starting server: ' + error.message)
+  }
+}
+
+const stopElectronServer = async () => {
+  if (!window.electronAPI) return
+  
+  try {
+    const result = await window.electronAPI.stopServer()
+    if (result.success) {
+      electronServerRunning.value = false
+      electronServerLogs.value.push('⏹️ Server stopped')
+    }
+  } catch (error) {
+    alert('Error stopping server: ' + error.message)
+  }
+}
+
+// Setup Electron IPC listeners
+if (isElectron.value && window.electronAPI) {
+  window.electronAPI.onServerLog((message) => {
+    electronServerLogs.value.push(message.trim())
+    if (electronServerLogs.value.length > 50) {
+      electronServerLogs.value.shift()
+    }
+  })
+  
+  window.electronAPI.onServerError((message) => {
+    electronServerLogs.value.push('❌ ' + message.trim())
+  })
+  
+  window.electronAPI.onServerStopped((code) => {
+    electronServerRunning.value = false
+    electronServerLogs.value.push(`⏹️ Server exited with code ${code}`)
+  })
+  
+  // Check initial server status
+  window.electronAPI.getServerStatus().then(status => {
+    electronServerRunning.value = status.running
+  })
 }
 
 const copyPeerId = async () => {
@@ -1139,19 +1888,55 @@ const performSearch = async () => {
     networkLatency.value = null
     
     const Book = getBook()
-    const networkStartTime = performance.now() // Track network latency
+    const startTime = performance.now() // Track search time
     
     // Search locally if we have the dataset loaded
     if (datasetBook.value && datasetIndex.value) {
-      const results = Book.searchIndex(datasetIndex.value, searchQuery.value, { maxResults: 50 })
+      // Try exact/prefix match first
+      let results = Book.searchIndex(datasetIndex.value, searchQuery.value, { maxResults: 50 })
+      
+      // If no results and query looks like a partial word, try substring matching
+      if (results.length === 0 && searchQuery.value.length >= 3) {
+        const query = searchQuery.value.toLowerCase().trim()
+        const matchingKeys = Object.keys(datasetIndex.value).filter(key => 
+          key.includes(query) // Substring match: prefix, suffix, or anywhere in between
+        )
+        
+        if (matchingKeys.length > 0) {
+          console.log(`🔍 Found ${matchingKeys.length} substring matches for "${query}":`, matchingKeys.slice(0, 5))
+          // Get results from all matching keys with scoring
+          const seen = new Set()
+          results = []
+          for (const key of matchingKeys) {
+            const items = datasetIndex.value[key] || []
+            for (const item of items) {
+              if (!seen.has(item.key) && results.length < 50) {
+                seen.add(item.key)
+                // Calculate relevance score based on match position and length
+                const matchIndex = key.indexOf(query)
+                const score = matchIndex === 0 ? 1.0 : // Prefix match (best)
+                            matchIndex === key.length - query.length ? 0.8 : // Suffix match
+                            0.6 // Middle match
+                results.push({
+                  ...item,
+                  score: score,
+                  matchedWord: key
+                })
+              }
+            }
+          }
+          // Sort by score descending
+          results.sort((a, b) => b.score - a.score)
+        }
+      }
       
       const elapsed = performance.now() - startTime
       // Always format as string to preserve decimal places
       searchTime.value = elapsed < 1 ? elapsed.toFixed(2) : Math.round(elapsed).toString()
       searchResults.value = results.map(r => ({ ...r, source: 'local' }))
-      console.log(`� Local search found ${results.length} results in ${searchTime.value}ms`)
+      console.log(`🔍 Local search found ${results.length} results in ${searchTime.value}ms`)
     } else {
-      console.log('� No local dataset - querying peers only')
+      console.log('🔍 No local dataset - querying peers only')
       searchTime.value = null
     }
     
@@ -1202,7 +1987,7 @@ const setupDatasetMessageHandlers = () => {
   
   console.log('� Setting up dataset search message handlers...')
   
-  pigeon.value.on('messageReceived', (messageData) => {
+  pigeon.value.on('messageReceived', async (messageData) => {
     console.log('📨 RAW MESSAGE RECEIVED:', messageData)
     
     const { from, content } = messageData
@@ -1242,6 +2027,41 @@ const setupDatasetMessageHandlers = () => {
       if (targetDataset?.book && targetDataset?.index) {
         // We have full dataset - use index search
         results = Book.searchIndex(targetDataset.index, parsedContent.query, { maxResults: 10 })
+        
+        // If no results and query looks like a partial word, try substring matching
+        if (results.length === 0 && parsedContent.query.length >= 3) {
+          const query = parsedContent.query.toLowerCase().trim()
+          const matchingKeys = Object.keys(targetDataset.index).filter(key => 
+            key.includes(query) // Substring match: prefix, suffix, or anywhere in between
+          )
+          
+          if (matchingKeys.length > 0) {
+            console.log(`🔍 Found ${matchingKeys.length} substring matches for "${query}"`)
+            // Get results from all matching keys with scoring
+            const seen = new Set()
+            results = []
+            for (const key of matchingKeys) {
+              const items = targetDataset.index[key] || []
+              for (const item of items) {
+                if (!seen.has(item.key) && results.length < 10) {
+                  seen.add(item.key)
+                  // Calculate relevance score based on match position
+                  const matchIndex = key.indexOf(query)
+                  const score = matchIndex === 0 ? 1.0 : // Prefix match (best)
+                              matchIndex === key.length - query.length ? 0.8 : // Suffix match
+                              0.6 // Middle match
+                  results.push({
+                    ...item,
+                    score: score,
+                    matchedWord: key
+                  })
+                }
+              }
+            }
+            // Sort by score descending
+            results.sort((a, b) => b.score - a.score)
+          }
+        }
       } else if (window._datasetCache?.[targetDatasetId]) {
         // We only have cached items - search through them
         results = window._datasetCache[targetDatasetId].search(parsedContent.query)
@@ -1261,6 +2081,79 @@ const setupDatasetMessageHandlers = () => {
         // Stringify for gossip protocol
         pigeon.value.gossipManager.broadcastMessage(JSON.stringify(responseMessage), 'chat')
         console.log(`� Broadcasted ${results.length} search results to network`)
+      }
+      
+    } else if (parsedContent.type === 'file-search-response') {
+      // Received file search results from a server node
+      console.log(`📁 Received ${parsedContent.results?.length || 0} file results from peer`)
+      
+      if (parsedContent.results && parsedContent.results.length > 0) {
+        const peerResults = parsedContent.results.map(r => ({
+          ...r,
+          peerId: parsedContent.peerId || from,
+          score: r.score !== undefined ? r.score : 1.0 // Ensure score exists, default to 100%
+        }))
+        p2pFileSearchResults.value = [...p2pFileSearchResults.value, ...peerResults]
+        
+        // Deduplicate immediately - keep the one with the best score for each file+peer combo
+        const deduped = new Map()
+        p2pFileSearchResults.value.forEach(file => {
+          const key = `${file.id}-${file.peerId}`
+          const existing = deduped.get(key)
+          if (!existing || (file.score || 0) > (existing.score || 0)) {
+            deduped.set(key, file)
+          }
+        })
+        p2pFileSearchResults.value = Array.from(deduped.values())
+        
+        console.log(`📁 Total file results: ${p2pFileSearchResults.value.length} (deduplicated)`)
+      }
+      
+    } else if (parsedContent.type === 'node-announcement') {
+      // Server node announcing its available files
+      console.log(`📡 Node announcement from ${from?.substring(0, 8)}: ${parsedContent.files?.length || 0} files`)
+      
+      if (parsedContent.files && parsedContent.files.length > 0) {
+        // Store peer's file list for automatic discovery
+        if (!window._peerFileCache) {
+          window._peerFileCache = new Map()
+        }
+        
+        // Add score to all files before caching
+        const filesWithScores = parsedContent.files.map(file => ({
+          ...file,
+          score: file.score || 1.0, // Default to 100% for announced files
+          peerId: from // Track which peer has this file
+        }))
+        
+        window._peerFileCache.set(from, {
+          peerId: from,
+          files: filesWithScores,
+          timestamp: parsedContent.timestamp || Date.now()
+        })
+        
+        console.log(`📦 Cached ${filesWithScores.length} files from peer ${from?.substring(0, 8)}`)
+        
+        // Also store in DHT for distributed discovery
+        if (storage.isReady?.value) {
+          for (const file of filesWithScores) {
+            try {
+              const key = `file:${file.name.toLowerCase()}`
+              // Store file metadata with peer info
+              await storage.set(key, JSON.stringify({
+                id: file.id,
+                name: file.name,
+                size: file.size,
+                type: file.type,
+                peerId: from,
+                timestamp: Date.now()
+              }))
+              console.log(`📝 Stored ${file.name} metadata in DHT`)
+            } catch (error) {
+              console.warn(`Failed to store ${file.name} in DHT:`, error.message)
+            }
+          }
+        }
       }
       
     } else if (parsedContent.type === 'dataset-search-response') {
@@ -1388,6 +2281,52 @@ watch(connectionStatus, async (newStatus) => {
   }
 })
 
+// Watch search query for real-time search
+let searchTimeout = null
+watch(searchQuery, (newQuery) => {
+  // Clear any pending search
+  if (searchTimeout) {
+    clearTimeout(searchTimeout)
+  }
+  
+  // Only search if query is at least 3 characters
+  if (!newQuery || newQuery.trim().length < 3) {
+    searchResults.value = []
+    return
+  }
+  
+  // Debounce search by 300ms
+  searchTimeout = setTimeout(() => {
+    if (datasetBook.value || pigeon.value) {
+      console.log(`🔍 Auto-searching for: "${newQuery}"`)
+      performSearch()
+    }
+  }, 300)
+})
+
+// Watch file search query for real-time network file search
+let fileSearchTimeout = null
+watch(p2pFileSearchQuery, (newQuery) => {
+  // Clear any pending search
+  if (fileSearchTimeout) {
+    clearTimeout(fileSearchTimeout)
+  }
+  
+  // Only search if query is at least 2 characters
+  if (!newQuery || newQuery.trim().length < 2) {
+    p2pFileSearchResults.value = []
+    return
+  }
+  
+  // Debounce search by 400ms (slightly longer for network search)
+  fileSearchTimeout = setTimeout(() => {
+    if (pigeon.value) {
+      console.log(`📁 Auto-searching network files for: "${newQuery}"`)
+      searchNetworkFiles()
+    }
+  }, 400)
+})
+
 // No auto-connect - user must manually connect
 onMounted(async () => {
   // App is ready, but not automatically connecting
@@ -1454,7 +2393,7 @@ onMounted(async () => {
       }
       
       // Also load cached items (partial data from peer searches) for all datasets
-      for (const datasetId of Object.keys(availableDatasets)) {
+      for (const datasetId of Object.keys(AVAILABLE_DATASETS)) {
         const cachedItems = await loadCachedItems(datasetId)
         if (cachedItems && cachedItems.length > 0) {
           if (!window._datasetCache) window._datasetCache = {}

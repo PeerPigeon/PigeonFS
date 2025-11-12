@@ -3,6 +3,7 @@ import vue from '@vitejs/plugin-vue'
 
 export default defineConfig({
   plugins: [vue()],
+  base: './', // Use relative paths for Electron
   server: {
     host: '0.0.0.0',
     hmr: {

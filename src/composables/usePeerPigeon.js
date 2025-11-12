@@ -20,11 +20,14 @@ export function usePeerPigeon() {
       connectionStatus.value = 'connecting'
       
       console.log('Initializing PeerPigeonMesh...')
+      if (options.enableCrypto) {
+        console.log('🔒 End-to-end encryption enabled')
+      }
       
       pigeon.value = markRaw(new PeerPigeonMesh({
         networkName: options.networkName || 'pigeonfs',  // Use provided networkName or default
         enableWebDHT: false,
-        enableCrypto: false,
+        enableCrypto: options.enableCrypto || false,
         enableDistributedStorage: false,
         maxPeers: 10,
         minPeers: 0,  // Don't require any minimum peers
@@ -407,11 +410,36 @@ export function usePeerPigeon() {
   // Disconnect from PigeonHub
   const disconnect = () => {
     if (pigeon.value) {
-      pigeon.value.destroy()
+      try {
+        // Try to close all connections gracefully
+        if (pigeon.value.connectionManager) {
+          pigeon.value.connectionManager.peers.forEach((peer, peerId) => {
+            try {
+              peer.close()
+            } catch (e) {
+              console.warn('Error closing peer connection:', e)
+            }
+          })
+        }
+        
+        // Close WebSocket connection if available
+        if (pigeon.value.ws && pigeon.value.ws.close) {
+          pigeon.value.ws.close()
+        }
+        
+        // Remove event listeners
+        if (pigeon.value.removeAllListeners) {
+          pigeon.value.removeAllListeners()
+        }
+      } catch (error) {
+        console.warn('Error during disconnect:', error)
+      }
+      
       pigeon.value = null
       connectionStatus.value = 'disconnected'
       myPeerId.value = ''
       fileTransfers.clear()
+      console.log('✅ Disconnected from network')
     }
   }
 
