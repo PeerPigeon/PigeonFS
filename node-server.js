@@ -33,6 +33,7 @@ const CONFIG = {
   dataDir: process.env.DATA_DIR || path.join(__dirname, 'data'),
   enableCrypto: process.env.ENABLE_CRYPTO !== 'false', // Default to true unless explicitly disabled
   httpPort: parseInt(process.env.HTTP_PORT || '3000'),
+  storageQuota: parseInt(process.env.STORAGE_QUOTA || '10737418240'), // Default 10GB in bytes
   bootstrapNodes: [
     'wss://pigeonhub.fly.dev',
     'wss://pigeonhub-c.fly.dev'
@@ -43,6 +44,8 @@ const CONFIG = {
 
 class PigeonFSNode {
   constructor(config) {
+    this.config = config
+    this.storageUsed = 0 // Track current storage usage
     this.config = config
     this.pigeon = null
     this.datasets = new Map() // datasetId -> { book, index, data }
@@ -418,6 +421,8 @@ class PigeonFSNode {
     const filesDir = path.join(this.config.dataDir, 'files')
     await fs.mkdir(filesDir, { recursive: true })
     
+    this.storageUsed = 0 // Reset storage counter
+    
     try {
       const files = await fs.readdir(filesDir)
       
@@ -437,12 +442,16 @@ class PigeonFSNode {
             buffer: buffer
           })
           
+          this.storageUsed += stats.size
+          
           console.log(`📄 Loaded file: ${filename} (${this.formatSize(stats.size)})`)
         }
       }
       
       if (this.files.size > 0) {
-        console.log(`✅ Loaded ${this.files.size} files`)
+        const quotaGB = (this.config.storageQuota / (1024 * 1024 * 1024)).toFixed(2)
+        const usedGB = (this.storageUsed / (1024 * 1024 * 1024)).toFixed(2)
+        console.log(`✅ Loaded ${this.files.size} files (${usedGB}GB / ${quotaGB}GB quota)`)
         this.rebuildFilesIndex()
       }
     } catch (error) {
@@ -650,6 +659,14 @@ class PigeonFSNode {
     const filesDir = path.join(this.config.dataDir, 'files')
     const filePath = path.join(filesDir, filename)
     
+    // Check storage quota
+    if (this.storageUsed + buffer.length > this.config.storageQuota) {
+      const quotaGB = (this.config.storageQuota / (1024 * 1024 * 1024)).toFixed(2)
+      const usedGB = (this.storageUsed / (1024 * 1024 * 1024)).toFixed(2)
+      const fileGB = (buffer.length / (1024 * 1024 * 1024)).toFixed(2)
+      throw new Error(`Storage quota exceeded! Used: ${usedGB}GB / ${quotaGB}GB. File size: ${fileGB}GB`)
+    }
+    
     // Save to disk
     await fs.writeFile(filePath, buffer)
     
@@ -662,7 +679,11 @@ class PigeonFSNode {
       buffer: buffer
     })
     
-    console.log(`✅ Added file: ${filename} (${this.formatSize(buffer.length)}) - ID: ${fileId}`)
+    this.storageUsed += buffer.length
+    
+    const usedGB = (this.storageUsed / (1024 * 1024 * 1024)).toFixed(2)
+    const quotaGB = (this.config.storageQuota / (1024 * 1024 * 1024)).toFixed(2)
+    console.log(`✅ Added file: ${filename} (${this.formatSize(buffer.length)}) - Storage: ${usedGB}GB / ${quotaGB}GB`)
     
     // Rebuild index and announce - reset backoff since we have new content
     this.rebuildFilesIndex()

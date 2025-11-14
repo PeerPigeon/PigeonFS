@@ -342,12 +342,30 @@
             <h2>Server Configuration</h2>
             <div class="config-form">
                 <div class="form-group">
+                    <label>Namespace</label>
+                    <input type="text" id="namespace" placeholder="pigeonfs" value="pigeonfs">
+                    <small style="color: #666; font-size: 0.85rem;">Network namespace for peer discovery</small>
+                </div>
+                <div class="form-group">
                     <label>Signaling Server URL</label>
                     <input type="text" id="signalingUrl" placeholder="ws://localhost:3001" value="ws://localhost:3001">
                 </div>
                 <div class="form-group">
                     <label>HTTP Port (0 for auto)</label>
                     <input type="text" id="httpPort" placeholder="3000" value="0">
+                </div>
+                <div class="form-group">
+                    <label>Storage Quota (GB)</label>
+                    <input type="number" id="storageQuota" placeholder="10" value="10" min="1" max="1000" step="1">
+                    <small style="color: #666; font-size: 0.85rem;">Maximum disk space for hosted files</small>
+                </div>
+                <div class="form-group">
+                    <label>Data Directory</label>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <input type="text" id="dataDirInput" readonly style="flex: 1; cursor: pointer;" placeholder="Click to select...">
+                        <button onclick="selectDataDir()">📁 Browse</button>
+                    </div>
+                    <small style="color: #666; font-size: 0.85rem;">Where files and datasets are stored</small>
                 </div>
             </div>
         </div>
@@ -388,6 +406,41 @@
     <script>
         let selectedFile = null;
         let serverRunning = false;
+        
+        // Load saved configuration
+        const savedConfig = localStorage.getItem('pigeonfs_server_config');
+        if (savedConfig) {
+            try {
+                const config = JSON.parse(savedConfig);
+                if (config.namespace) document.getElementById('namespace').value = config.namespace;
+                if (config.signalingUrl) document.getElementById('signalingUrl').value = config.signalingUrl;
+                if (config.httpPort) document.getElementById('httpPort').value = config.httpPort;
+                if (config.storageQuota) document.getElementById('storageQuota').value = config.storageQuota;
+                if (config.dataDir) document.getElementById('dataDirInput').value = config.dataDir;
+            } catch (e) {
+                console.error('Failed to load saved config:', e);
+            }
+        }
+        
+        // Save configuration when inputs change
+        function saveConfig() {
+            const config = {
+                namespace: document.getElementById('namespace').value,
+                signalingUrl: document.getElementById('signalingUrl').value,
+                httpPort: document.getElementById('httpPort').value,
+                storageQuota: document.getElementById('storageQuota').value,
+                dataDir: document.getElementById('dataDirInput').value
+            };
+            localStorage.setItem('pigeonfs_server_config', JSON.stringify(config));
+        }
+        
+        // Add change listeners to save config
+        document.addEventListener('DOMContentLoaded', () => {
+            ['namespace', 'signalingUrl', 'httpPort', 'storageQuota'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.addEventListener('change', saveConfig);
+            });
+        });
 
         // Listen for server logs
         window.electronAPI.onServerLog((log) => {
@@ -413,14 +466,20 @@
         });
 
         async function startServer() {
+            const namespace = document.getElementById('namespace').value || 'pigeonfs';
             const signalingUrl = document.getElementById('signalingUrl').value;
             const httpPort = parseInt(document.getElementById('httpPort').value) || 0;
+            const storageQuota = parseInt(document.getElementById('storageQuota').value) || 10;
+            const dataDir = document.getElementById('dataDirInput').value || null;
             
             addLog('Starting server...', 'info');
             const result = await window.electronAPI.startServer({ 
+                namespace,
                 signalingUrl, 
                 httpPort,
-                enableCrypto: true // Enable encryption by default
+                enableCrypto: true, // Enable encryption by default
+                storageQuota: storageQuota * 1024 * 1024 * 1024, // Convert GB to bytes
+                dataDir: dataDir
             });
             
             if (!result.success) {
@@ -436,7 +495,9 @@
         async function selectDataDir() {
             const dir = await window.electronAPI.selectDirectory();
             if (dir) {
+                document.getElementById('dataDirInput').value = dir;
                 document.getElementById('dataDir').textContent = dir;
+                saveConfig(); // Save the selected directory
                 addLog(`Data directory set to: ${dir}`, 'info');
             }
         }
@@ -589,8 +650,19 @@
             return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
         }
 
-        // Initial UI update
+        // Initial UI update and load saved data directory
         updateUI();
+        
+        // Display saved data directory in status on load
+        const savedCfg = localStorage.getItem('pigeonfs_server_config');
+        if (savedCfg) {
+            try {
+                const cfg = JSON.parse(savedCfg);
+                if (cfg.dataDir) {
+                    document.getElementById('dataDir').textContent = cfg.dataDir;
+                }
+            } catch (e) {}
+        }
     </script>
 </body>
 </html>

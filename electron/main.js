@@ -12,6 +12,7 @@ const rootDir = join(__dirname, '..')
 
 let mainWindow
 let serverProcess
+let currentDataDir = null
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -55,12 +56,16 @@ function startServer(config = {}) {
   return new Promise((resolve, reject) => {
     const serverPath = join(rootDir, 'node-server.js')
     
+    // Store the data directory being used
+    currentDataDir = config.dataDir || join(app.getPath('userData'), 'data')
+    
     const env = {
       ...process.env,
-      NETWORK_NAME: config.networkName || 'pigeonfs',
+      NETWORK_NAME: config.namespace || 'pigeonfs',
       HTTP_PORT: config.httpPort || '0',
       ENABLE_CRYPTO: config.enableCrypto ? 'true' : 'false',
-      DATA_DIR: config.dataDir || join(app.getPath('userData'), 'data')
+      DATA_DIR: currentDataDir,
+      STORAGE_QUOTA: config.storageQuota ? config.storageQuota.toString() : '10737418240' // Default 10GB
     }
 
     serverProcess = fork(serverPath, [], {
@@ -152,9 +157,12 @@ ipcMain.handle('select-directory', async () => {
 
 ipcMain.handle('upload-file', async (event, { fileName, fileBuffer }) => {
   try {
-    // Get the data directory (same as server uses)
-    const dataDir = join(os.homedir(), 'Library', 'Application Support', 'pigeonfs', 'data')
-    const filesDir = join(dataDir, 'files')
+    if (!currentDataDir) {
+      throw new Error('Server not started - no data directory configured')
+    }
+    
+    // Use the same data directory as the server
+    const filesDir = join(currentDataDir, 'files')
     
     // Ensure directory exists
     await fsPromises.mkdir(filesDir, { recursive: true })
