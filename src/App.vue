@@ -1000,6 +1000,34 @@ const handleConnect = async () => {
       console.log('Initializing PagingStorage...')
       await storage.initialize(pigeon.value)
       console.log('PagingStorage ready!')
+      
+      // Setup gossip message listener for announcements
+      if (pigeon.value.gossipManager) {
+        console.log('📡 Setting up gossip listener for node announcements...')
+        pigeon.value.gossipManager.addEventListener('messageReceived', (data) => {
+          console.log('📡 Gossip message received:', data)
+          
+          // Parse the gossip message
+          let content = data.content
+          if (typeof content === 'string') {
+            try {
+              content = JSON.parse(content)
+            } catch (e) {
+              console.log('Failed to parse gossip message:', e)
+              return
+            }
+          }
+          
+          // Forward gossip message to the main messageReceived handler
+          // by emitting it as if it came through direct messaging
+          const messageData = {
+            from: data.from,
+            content: content
+          }
+          pigeon.value.emit('messageReceived', messageData)
+        })
+        console.log('✅ Gossip listener ready')
+      }
     }
   } catch (error) {
     console.error('Connection failed:', error)

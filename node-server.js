@@ -120,6 +120,9 @@ class PigeonFSNode {
 
     // Setup message handlers
     this.setupMessageHandlers()
+    
+    // Setup gossip listener for peer messages
+    this.setupGossipListener()
 
     // Load datasets if enabled
     if (this.config.autoLoadDatasets) {
@@ -143,6 +146,19 @@ class PigeonFSNode {
   }
 
   setupMessageHandlers() {
+    // Listen for peer connection/disconnection
+    this.pigeon.on('peerConnected', (data) => {
+      console.log(`🤝 Peer connected: ${data.peerId?.substring(0, 8)}`)
+      console.log(`   Total peers: ${this.pigeon.connectionManager.peers.size}`)
+      // Re-announce when new peer connects
+      this.announceAvailability()
+    })
+    
+    this.pigeon.on('peerDisconnected', (data) => {
+      console.log(`👋 Peer disconnected: ${data.peerId?.substring(0, 8)}`)
+      console.log(`   Total peers: ${this.pigeon.connectionManager.peers.size}`)
+    })
+    
     this.pigeon.on('messageReceived', async ({ from, content }) => {
       try {
         if (typeof content === 'string') {
@@ -169,6 +185,36 @@ class PigeonFSNode {
         console.error('Error handling message:', error)
       }
     })
+  }
+  
+  setupGossipListener() {
+    if (this.pigeon.gossipManager) {
+      console.log('📡 Setting up gossip listener...')
+      this.pigeon.gossipManager.addEventListener('messageReceived', (data) => {
+        console.log('📡 Gossip message received:', data)
+        
+        // Parse the gossip message
+        let content = data.content
+        if (typeof content === 'string') {
+          try {
+            content = JSON.parse(content)
+          } catch (e) {
+            return
+          }
+        }
+        
+        // Log peer announcements
+        if (content.type === 'node-announcement') {
+          console.log(`📡 Peer announcement from ${data.from?.substring(0, 8)}: ${content.files?.length || 0} files`)
+        }
+        
+        // Forward to regular message handler
+        this.pigeon.emit('messageReceived', {
+          from: data.from,
+          content: content
+        })
+      })
+    }
   }
 
   async handleSearchRequest(request, fromPeerId) {
