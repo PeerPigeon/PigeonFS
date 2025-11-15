@@ -42,6 +42,11 @@ export function usePeerPigeon() {
       
       console.log('PeerPigeonMesh initialized, setting up events...')
 
+      // Listen for peer discovery events
+      pigeon.value.on('peerDiscovered', (data) => {
+        console.log('🔍 Peer discovered:', data.peerId?.substring(0, 8), data)
+      })
+
       // Wait for connection to be established
       await new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
@@ -56,6 +61,8 @@ export function usePeerPigeon() {
             myPeerId.value = pigeon.value.peerId
             connectionStatus.value = 'connected'
             console.log('✅ Connected with peer ID:', pigeon.value.peerId)
+            console.log(`📊 Connection Manager: ${pigeon.value.connectionManager ? 'Ready' : 'Not Ready'}`)
+            console.log(`📊 Current peers: ${pigeon.value.connectionManager?.peers?.size || 0}`)
             resolve()
           }
         })
@@ -89,6 +96,20 @@ export function usePeerPigeon() {
           }
         })
       })
+
+      // After successful hub connection, manually trigger peer discovery
+      if (pigeon.value.ws && pigeon.value.ws.readyState === 1) {
+        console.log('🔍 Requesting peer list from hub...')
+        // Send a message to request peers in our network namespace
+        try {
+          pigeon.value.ws.send(JSON.stringify({
+            type: 'getPeers',
+            networkName: options.networkName || 'pigeonfs'
+          }))
+        } catch (e) {
+          console.warn('Could not request peer list:', e)
+        }
+      }
 
       // Set up message listener for file transfers
       pigeon.value.on('messageReceived', (messageData) => {

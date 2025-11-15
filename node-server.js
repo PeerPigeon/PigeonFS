@@ -80,6 +80,11 @@ class PigeonFSNode {
 
     await this.pigeon.init()
     
+    // Listen for peer discovery events
+    this.pigeon.on('peerDiscovered', (data) => {
+      console.log('🔍 Peer discovered:', data.peerId?.substring(0, 8), data)
+    })
+    
     // Connect to bootstrap nodes (non-blocking)
     let connected = false
     for (const node of this.config.bootstrapNodes) {
@@ -87,6 +92,26 @@ class PigeonFSNode {
         console.log(`🔗 Connecting to: ${node}`)
         await this.pigeon.connect(node)
         connected = true
+        console.log(`✅ Connected to PigeonHub: ${node}`)
+        console.log(`📊 Connection Manager: ${this.pigeon.connectionManager ? 'Ready' : 'Not Ready'}`)
+        console.log(`📊 Hub connection: ${this.pigeon.ws ? 'Active' : 'Inactive'}`)
+        
+        // Listen to WebSocket messages from hub
+        if (this.pigeon.ws) {
+          const originalOnMessage = this.pigeon.ws.onmessage
+          this.pigeon.ws.onmessage = (event) => {
+            try {
+              const data = JSON.parse(event.data)
+              if (data.type === 'peerList' || data.type === 'peerJoined' || data.type === 'peerLeft') {
+                console.log(`📡 Hub message (${data.type}):`, data)
+              }
+            } catch (e) {
+              // Not JSON or can't parse
+            }
+            if (originalOnMessage) originalOnMessage.call(this.pigeon.ws, event)
+          }
+        }
+        
         break // Successfully connected
       } catch (error) {
         console.warn(`⚠️  Failed to connect to ${node}:`, error.message)
@@ -116,6 +141,19 @@ class PigeonFSNode {
     } else {
       console.log(`⚠️  Starting in standalone mode (no peers connected)`)
       console.log(`   Peer ID: ${this.pigeon.peerId}`)
+    }
+    
+    // Manually request peer list from hub
+    if (this.pigeon.ws && this.pigeon.ws.readyState === 1) {
+      console.log('🔍 Requesting peer list from PigeonHub...')
+      try {
+        this.pigeon.ws.send(JSON.stringify({
+          type: 'getPeers',
+          networkName: this.config.networkName
+        }))
+      } catch (e) {
+        console.warn('Could not request peer list:', e)
+      }
     }
 
     // Setup message handlers
