@@ -1,6 +1,6 @@
 {
   "name": "pigeonfs",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "P2P file sharing and searchable datasets using PeerPigeon",
   "type": "module",
   "main": "electron/main.js",
@@ -43,15 +43,15 @@
     ],
     "mac": {
       "target": "dmg",
-      "icon": "src/assets/pigeonlogo.jpg"
+      "icon": "data/files/pigeonlogo.png"
     },
     "win": {
       "target": "nsis",
-      "icon": "src/assets/pigeonlogo.jpg"
+      "icon": "data/files/pigeonlogo.png"
     },
     "linux": {
       "target": "AppImage",
-      "icon": "src/assets/pigeonlogo.jpg"
+      "icon": "data/files/pigeonlogo.png"
     }
   },
   "repository": {
