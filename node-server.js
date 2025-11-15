@@ -13,6 +13,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import http from 'http'
 import { WebSocket } from 'ws'
+import crypto from 'crypto'
 
 // Polyfill WebSocket for Node.js environment
 if (typeof global.WebSocket === 'undefined') {
@@ -48,7 +49,8 @@ class PigeonFSNode {
     this.storageUsed = 0 // Track current storage usage
     this.config = config
     this.pigeon = null
-    this.datasets = new Map() // datasetId -> { book, index, data }
+    this.datasets = new Map() // sha1Hash -> { book, index, data, name, hash, checksum }
+    this.datasetsByName = new Map() // name -> sha1Hash (for lookup)
     this.files = new Map() // fileId -> buffer
     this.filesIndex = null // Book.js index for file search
     this.httpServer = null
@@ -257,15 +259,22 @@ class PigeonFSNode {
 
   async handleSearchRequest(request, fromPeerId) {
     const { query, dataset, requestId } = request
-    const datasetId = dataset || 'bible-kjv'
+    const datasetName = dataset || 'bible-kjv'
     
-    const ds = this.datasets.get(datasetId)
+    // Lookup dataset by name to get the hash
+    const datasetHash = this.datasetsByName.get(datasetName)
+    if (!datasetHash) {
+      console.log(`📖 Search request for ${datasetName} - not loaded`)
+      return
+    }
+    
+    const ds = this.datasets.get(datasetHash)
     if (!ds) {
-      console.log(`📖 Search request for ${datasetId} - not loaded`)
+      console.log(`📖 Search request for ${datasetName} - hash not found`)
       return
     }
 
-    console.log(`🔍 Search request: "${query}" in ${datasetId} from ${fromPeerId.substring(0, 8)}`)
+    console.log(`🔍 Search request: "${query}" in ${datasetName} (${datasetHash.substring(0, 8)}...) from ${fromPeerId.substring(0, 8)}`)
     
     // Try exact/prefix match first
     let results = Book.searchIndex(ds.index, query, { maxResults: 50 })
@@ -310,7 +319,9 @@ class PigeonFSNode {
       const response = {
         type: 'dataset-search-response',
         requestId,
-        dataset: datasetId,
+        dataset: datasetName,
+        datasetHash: datasetHash,
+        datasetChecksum: ds.checksum,
         results,
         query
       }
@@ -378,10 +389,11 @@ class PigeonFSNode {
   async handleAvailabilityRequest(fromPeerId) {
     const availability = {
       type: 'dataset-availability-response',
-      datasets: Array.from(this.datasets.keys()).map(id => {
-        const ds = this.datasets.get(id)
+      datasets: Array.from(this.datasets.values()).map(ds => {
         return {
-          id,
+          name: ds.name,
+          hash: ds.hash,
+          checksum: ds.checksum,
           itemCount: ds.data.length,
           indexSize: Object.keys(ds.index).length
         }
@@ -884,6 +896,24 @@ class PigeonFSNode {
       const fileContent = await fs.readFile(filePath, 'utf8')
       const data = JSON.parse(fileContent)
       
+      // Calculate SHA1 hash of the raw content
+      const sha1Hash = crypto.createHash('sha1').update(fileContent).digest('hex')
+      
+      // Calculate checksum of the parsed data (for content verification)
+      const sortedDataString = JSON.stringify(data.sort((a, b) => 
+        JSON.stringify(a).localeCompare(JSON.stringify(b))
+      ))
+      const checksum = crypto.createHash('sha256').update(sortedDataString).digest('hex')
+      
+      // Check if we already have this exact dataset loaded
+      if (this.datasets.has(sha1Hash)) {
+        const existing = this.datasets.get(sha1Hash)
+        console.log(`✅ Dataset ${datasetId} already loaded as ${existing.name} (SHA1: ${sha1Hash.substring(0, 8)}..., checksum matches)`)
+        // Map the name to the existing hash for lookups
+        this.datasetsByName.set(datasetId, sha1Hash)
+        return sha1Hash
+      }
+      
       // Create Book.js instance (Book is a function, not a constructor)
       const book = Book()
       data.forEach(entry => {
@@ -893,17 +923,28 @@ class PigeonFSNode {
       // Build index
       const index = Book.index(book)
       
-      this.datasets.set(datasetId, {
+      this.datasets.set(sha1Hash, {
         book,
         index,
         data,
+        name: datasetId,
+        hash: sha1Hash,
+        checksum: checksum,
         itemCount: data.length,
         indexSize: Object.keys(index).length
       })
       
+      // Map the name to the hash
+      this.datasetsByName.set(datasetId, sha1Hash)
+      
       console.log(`✅ Loaded ${datasetId}: ${data.length} items, ${Object.keys(index).length} index entries`)
+      console.log(`   SHA1: ${sha1Hash}`)
+      console.log(`   Checksum: ${checksum.substring(0, 16)}...`)
+      
+      return sha1Hash
     } catch (error) {
       console.error(`Failed to load dataset ${datasetId}:`, error)
+      return null
     }
   }
 
@@ -943,7 +984,13 @@ class PigeonFSNode {
     const message = {
       type: 'node-announcement',
       nodeType: 'pigeonfs-server',
-      datasets: Array.from(this.datasets.keys()),
+      datasets: Array.from(this.datasets.values()).map(ds => ({
+        name: ds.name,
+        hash: ds.hash,
+        checksum: ds.checksum,
+        itemCount: ds.itemCount,
+        indexSize: ds.indexSize
+      })),
       files: Array.from(this.files.keys()).map(fileId => {
         const file = this.files.get(fileId)
         return {
@@ -976,8 +1023,8 @@ class PigeonFSNode {
     console.log(`   Peer ID: ${this.pigeon.peerId}`)
     console.log(`   Connected Peers: ${this.pigeon.connectionManager.peers.size}`)
     console.log(`   Loaded Datasets: ${this.datasets.size}`)
-    this.datasets.forEach((ds, id) => {
-      console.log(`     - ${id}: ${ds.itemCount} items`)
+    this.datasets.forEach((ds, hash) => {
+      console.log(`     - ${ds.name} (${hash.substring(0, 8)}...): ${ds.itemCount} items`)
     })
     console.log(`   Hosted Files: ${this.files.size}`)
     console.log('')
