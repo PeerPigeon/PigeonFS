@@ -69,9 +69,10 @@ function startServer(config = {}) {
       STORAGE_QUOTA: config.storageQuota ? config.storageQuota.toString() : '10737418240' // Default 10GB
     }
 
-    serverProcess = fork(serverPath, [], {
+    serverProcess = fork(serverPath, ['--expose-gc'], {
       env,
-      stdio: 'pipe'
+      stdio: 'pipe',
+      execArgv: ['--expose-gc', '--max-old-space-size=4096'] // Enable GC and increase memory limit to 4GB
     })
 
   let actualPort = null

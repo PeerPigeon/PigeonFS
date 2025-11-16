@@ -615,6 +615,12 @@
                 </div>
                 <div style="font-size: 0.75rem; color: #666; margin-top: 4px;">
                   {{ downloadingFiles[getFileId(result)].progress.toFixed(1) }}%
+                  <template v-if="downloadingFiles[getFileId(result)].size > 0">
+                    - {{ formatFileSize(downloadingFiles[getFileId(result)].received) }} / {{ formatFileSize(downloadingFiles[getFileId(result)].size) }}
+                  </template>
+                  <span v-if="downloadingFiles[getFileId(result)].speed !== undefined">
+                    • {{ formatSpeed(downloadingFiles[getFileId(result)].speed) }}
+                  </span>
                 </div>
               </div>
             </div>
@@ -693,6 +699,9 @@
                   <div style="font-size: 0.75rem; color: #666; margin-top: 4px;">
                     {{ downloadingFiles[file.id].progress.toFixed(1) }}% - 
                     {{ formatFileSize(downloadingFiles[file.id].received) }} / {{ formatFileSize(file.size) }}
+                    <span v-if="downloadingFiles[file.id].speed !== undefined">
+                      • {{ formatSpeed(downloadingFiles[file.id].speed) }}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -1056,7 +1065,11 @@ const datasets = ref({}) // { datasetId: { loaded, loading, book, index, itemCou
 // Watch for file-index dataset changes and announce to peers
 watch(
   () => datasets.value['file-index'] ? [datasets.value['file-index'].itemCount, datasets.value['file-index'].indexSize] : [0,0],
-  async ([newCount, newIndexSize], [oldCount, oldIndexSize]) => {
+  async (newValues, oldValues) => {
+    // Safely destructure with defaults
+    const [newCount = 0, newIndexSize = 0] = newValues || [0, 0]
+    const [oldCount = 0, oldIndexSize = 0] = oldValues || [0, 0]
+    
     if (
       pigeon.value && pigeon.value.gossipManager &&
       datasets.value['file-index'] &&
@@ -1285,42 +1298,10 @@ const handleServerFileUpload = async (event) => {
   
   try {
     for (const file of files) {
-      console.log(`📤 Starting P2P upload: ${file.name} (${formatSize(file.size)})`)
+      console.log(`📤 Starting P2P stream upload: ${file.name} (${formatFileSize(file.size)})`)
       
-      // Read file as ArrayBuffer
-      const arrayBuffer = await file.arrayBuffer()
-      const buffer = new Uint8Array(arrayBuffer)
-      
-      // Split into chunks
-      const chunkSize = 64 * 1024 // 64KB chunks
-      const totalChunks = Math.ceil(buffer.length / chunkSize)
-      const fileId = `upload-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-      
-      console.log(`📦 Uploading ${totalChunks} chunks to server`)
-      
-      // Send chunks to server
-      for (let i = 0; i < totalChunks; i++) {
-        const start = i * chunkSize
-        const end = Math.min(start + chunkSize, buffer.length)
-        const chunk = Array.from(buffer.slice(start, end))
-        
-        const message = {
-          type: 'file-chunk-upload',
-          fileId,
-          fileName: file.name,
-          fileSize: file.size,
-          fileType: file.type || 'application/octet-stream',
-          chunkIndex: i,
-          chunk,
-          totalChunks,
-          isLastChunk: i === totalChunks - 1
-        }
-        
-        await pigeon.sendDirectMessage(serverPeerId.value, message)
-        
-        const progress = ((i + 1) / totalChunks * 100).toFixed(1)
-        console.log(`📤 Sent chunk ${i + 1}/${totalChunks} (${progress}%)`)
-      }
+      // Use PeerPigeon's sendFile which uses streams internally
+      await pigeon.value.sendFile(serverPeerId.value, file)
       
       console.log(`✅ Upload complete: ${file.name}`)
     }
@@ -1574,91 +1555,35 @@ const uniqueFilePeers = computed(() => {
   return peers.size
 })
 
-// P2P File Download via chunk requests
+// P2P File Download via streams (NOT chunks!)
 const downloadP2PFile = async (file) => {
   if (!pigeon.value || downloadingFiles.value[file.id]) {
     return
   }
 
-  console.log(`📥 Starting P2P download for ${file.name} from peer ${file.peerId}`)
+  console.log(`📥 Starting P2P stream download for ${file.name} from peer ${file.peerId}`)
   
-  // Initialize download state
+  // Initialize download state with speed tracking
+  const startTime = Date.now()
+  let lastSpeedUpdate = startTime
+  let lastReceivedBytes = 0
+  
   downloadingFiles.value[file.id] = {
     progress: 0,
     received: 0,
-    chunks: [],
-    totalChunks: Math.ceil(file.size / (64 * 1024)), // 64KB chunks
+    speed: 0,
+    startTime,
     peerId: file.peerId
   }
 
-  const CHUNK_SIZE = 64 * 1024 // 64KB
-  const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
-  
-  // Request chunks one at a time (simple implementation)
-  for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
-    const chunkRequest = {
-      type: 'file-chunk-request',
-      fileId: file.id,
-      chunkIndex,
-      timestamp: Date.now()
-    }
+  // Request file via direct message
+  await pigeon.value.sendDirectMessage(file.peerId, {
+    type: 'file-stream-request',
+    fileId: file.id,
+    fileName: file.name
+  })
 
-    console.log(`📥 Requesting chunk ${chunkIndex + 1}/${totalChunks}`)
-    
-    // Send chunk request directly to the peer
-    try {
-      await pigeon.value.sendDirectMessage(file.peerId, chunkRequest)
-      
-      // Wait for chunk response (with timeout)
-      await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('Chunk timeout')), 30000) // 30 second timeout
-        
-        const handler = (data) => {
-          // Check if this is the chunk we're waiting for
-          const content = data.content
-          if (data.from === file.peerId && content?.type === 'file-chunk' && 
-              content?.fileId === file.id && content?.chunkIndex === chunkIndex) {
-            clearTimeout(timeout)
-            pigeon.value.off('messageReceived', handler)
-            
-            // Convert array back to Uint8Array
-            const chunkData = new Uint8Array(content.chunk)
-            downloadingFiles.value[file.id].chunks[chunkIndex] = chunkData
-            downloadingFiles.value[file.id].received += chunkData.length
-            downloadingFiles.value[file.id].progress = (downloadingFiles.value[file.id].received / file.size) * 100
-            
-            console.log(`📥 Received chunk ${chunkIndex + 1}/${totalChunks} (${chunkData.length} bytes)`)
-            resolve()
-          }
-        }
-        
-        pigeon.value.on('messageReceived', handler)
-      })
-      
-    } catch (error) {
-      console.error(`Failed to download chunk ${chunkIndex}:`, error)
-      delete downloadingFiles.value[file.id]
-      uploadError.value = `Download failed at chunk ${chunkIndex + 1}/${totalChunks}: ${error.message}`
-      return
-    }
-  }
-
-  // All chunks received - reconstruct file
-  console.log(`✅ Downloaded all ${totalChunks} chunks`)
-  const fileBlob = new Blob(downloadingFiles.value[file.id].chunks, { type: file.type })
-  
-  // Trigger download
-  const url = URL.createObjectURL(fileBlob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = file.name
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(url)
-  
-  delete downloadingFiles.value[file.id]
-  console.log(`✅ Downloaded ${file.name} via P2P`)
+  console.log(`� Requested file stream for: ${file.name}`)
 }
 
 const downloadServerFile = async (file) => {
@@ -1822,6 +1747,15 @@ const formatFileSize = (bytes) => {
   const sizes = ['Bytes', 'KB', 'MB', 'GB']
   const i = Math.floor(Math.log(bytes) / Math.log(k))
   return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i]
+}
+
+// Format download speed (bytes/sec to KB/s, MB/s, etc)
+const formatSpeed = (bps) => {
+  if (!bps || bps < 1) return '0 B/s'
+  const k = 1024
+  if (bps < k) return bps.toFixed(0) + ' B/s'
+  if (bps < k * k) return (bps / k).toFixed(1) + ' KB/s'
+  return (bps / (k * k)).toFixed(2) + ' MB/s'
 }
 
 // Storage operation handlers
@@ -2474,6 +2408,10 @@ const downloadDatasetFile = async (result) => {
       totalChunks: fileInfo.size ? Math.ceil(fileInfo.size / CHUNK_SIZE) : undefined,
       progress: 0,
       received: 0,
+      speed: 0,
+      startTime: Date.now(),
+      lastSpeedUpdate: Date.now(),
+      lastReceivedBytes: 0,
       chunks: [],
       mode: 'dataset'
     }
@@ -2505,7 +2443,87 @@ const setupDatasetMessageHandlers = () => {
     return
   }
   
-  console.log('� Setting up dataset search message handlers...')
+  console.log('📡 Setting up dataset search message handlers...')
+  
+  // Handle incoming streams
+  pigeon.value.on('streamReceived', async (event) => {
+    const { peerId, stream, metadata } = event
+    console.log(`📥 Receiving stream: ${metadata.filename} (${formatFileSize(metadata.totalSize)}) from ${peerId.substring(0, 8)}`)
+    
+    const fileId = metadata.fileId
+    if (!downloadingFiles.value[fileId]) {
+      console.warn(`⚠️ Received stream for unknown file: ${fileId}`)
+      return
+    }
+    
+    const startTime = downloadingFiles.value[fileId].startTime
+    let lastSpeedUpdate = Date.now()
+    let lastReceivedBytes = 0
+    
+    try {
+      // Read stream chunks
+      const chunks = []
+      const reader = stream.getReader()
+      
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        
+        chunks.push(value)
+        downloadingFiles.value[fileId].received += value.length
+        
+        // Calculate speed
+        const now = Date.now()
+        const timeDiff = (now - lastSpeedUpdate) / 1000
+        if (timeDiff >= 0.3) {
+          const bytesDiff = downloadingFiles.value[fileId].received - lastReceivedBytes
+          downloadingFiles.value[fileId].speed = bytesDiff / timeDiff
+          lastSpeedUpdate = now
+          lastReceivedBytes = downloadingFiles.value[fileId].received
+        }
+        
+        // Calculate progress
+        if (metadata.totalSize) {
+          const rawProgress = (downloadingFiles.value[fileId].received / metadata.totalSize) * 100
+          downloadingFiles.value[fileId].progress = Math.min(100, Math.max(0, rawProgress))
+        }
+      }
+      
+      // Calculate final average speed
+      const totalTime = (Date.now() - startTime) / 1000
+      const avgSpeed = metadata.totalSize / totalTime
+      downloadingFiles.value[fileId].speed = avgSpeed
+      downloadingFiles.value[fileId].progress = 100
+      
+      console.log(`📊 Stream complete: ${formatFileSize(metadata.totalSize)} in ${totalTime.toFixed(1)}s @ ${formatSpeed(avgSpeed)}`)
+      
+      // Create blob and trigger download
+      const blob = new Blob(chunks, { type: metadata.mimeType })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = metadata.filename
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      
+      // Clean up
+      setTimeout(() => {
+        delete downloadingFiles.value[fileId]
+        console.log(`✅ Downloaded ${metadata.filename} via stream - memory cleaned up`)
+        if (window.gc) {
+          window.gc()
+          console.log('🧹 Forced garbage collection')
+        }
+      }, 2000)
+      
+    } catch (error) {
+      console.error('Stream download failed:', error)
+      delete downloadingFiles.value[fileId]
+      uploadError.value = `Stream download failed: ${error.message}`
+    }
+  })
   
   pigeon.value.on('messageReceived', async (messageData) => {
     console.log('📨 RAW MESSAGE RECEIVED:', messageData)
@@ -2530,21 +2548,44 @@ const setupDatasetMessageHandlers = () => {
     
     console.log('📨 Received message:', parsedContent.type, 'from', from?.substring(0, 8))
 
-    // Handle incoming file chunks for dataset-initiated downloads
+    // Handle incoming file chunk headers for dataset-initiated downloads
     if (parsedContent.type === 'file-chunk') {
       const { fileId, chunkIndex, chunk, isLastChunk } = parsedContent
       const dl = downloadingFiles.value[fileId]
       if (dl && dl.mode === 'dataset') {
         try {
-          const chunkData = new Uint8Array(chunk)
+          // chunk will be Uint8Array if sent as binary, or array if not
+          const chunkData = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk)
+          
+          console.log(`📦 Received chunk ${chunkIndex} (${chunkData.length} bytes)`)
+          
+          // Only add to received if this chunk wasn't already counted
+          const existingChunk = dl.chunks[chunkIndex]
+          if (!existingChunk) {
+            dl.received += chunkData.length
+          } else {
+            console.warn(`⚠️ Chunk ${chunkIndex} already exists, not double-counting`)
+          }
+          
           dl.chunks[chunkIndex] = chunkData
-          dl.received += chunkData.length
+          
+          // Calculate speed
+          const now = Date.now()
+          const timeDiff = (now - dl.lastSpeedUpdate) / 1000
+          if (timeDiff >= 0.5) {
+            const bytesDiff = dl.received - dl.lastReceivedBytes
+            dl.speed = bytesDiff / timeDiff
+            dl.lastSpeedUpdate = now
+            dl.lastReceivedBytes = dl.received
+          }
+          
           if (dl.size) {
-            dl.progress = (dl.received / dl.size) * 100
+            dl.progress = Math.min(100, Math.max(0, (dl.received / dl.size) * 100))
           } else if (dl.totalChunks) {
             const receivedChunks = dl.chunks.filter(Boolean).length
-            dl.progress = (receivedChunks / dl.totalChunks) * 100
+            dl.progress = Math.min(100, Math.max(0, (receivedChunks / dl.totalChunks) * 100))
           }
+          
           // Request next chunk or finish
           if (!isLastChunk) {
             const nextIndex = chunkIndex + 1
@@ -2558,6 +2599,10 @@ const setupDatasetMessageHandlers = () => {
             // Assemble and trigger download
             console.log(`✅ All chunks received for ${dl.name}, assembling...`)
             const blob = new Blob(dl.chunks, { type: dl.type })
+            
+            // Clear chunks array immediately to free memory
+            dl.chunks = null
+            
             const url = URL.createObjectURL(blob)
             const a = document.createElement('a')
             a.href = url
@@ -2566,10 +2611,20 @@ const setupDatasetMessageHandlers = () => {
             a.click()
             document.body.removeChild(a)
             URL.revokeObjectURL(url)
-            delete downloadingFiles.value[fileId]
+            
+            // Clean up
+            setTimeout(() => {
+              delete downloadingFiles.value[fileId]
+              console.log(`✅ Download complete - memory cleaned up`)
+              
+              if (window.gc) {
+                window.gc()
+                console.log('🧹 Forced garbage collection')
+              }
+            }, 1000)
           }
         } catch (e) {
-          console.error('Failed processing incoming chunk:', e)
+          console.error('Failed processing chunk:', e)
         }
         return // handled
       }

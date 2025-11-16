@@ -206,6 +206,13 @@ export function usePeerPigeon() {
     
     if (!transfer || fileIndex === -1) return
     
+    // Check if chunk already exists to prevent double-counting
+    const existingChunk = transfer.chunks[chunkIndex]
+    if (existingChunk) {
+      console.warn(`⚠️ Chunk ${chunkIndex} already received for transfer ${transferId}, skipping`)
+      return
+    }
+    
     // Store chunk as Uint8Array
     transfer.chunks[chunkIndex] = new Uint8Array(chunk)
     transfer.receivedChunks++
@@ -260,12 +267,15 @@ export function usePeerPigeon() {
     
     const blob = new Blob([fileData], { type: transfer.mimeType || 'application/octet-stream' })
     
+    // Clear chunks array immediately to free memory
+    transfer.chunks = null
+    
     receivedFiles[fileIndex].blob = blob
     receivedFiles[fileIndex].status = 'complete'
     receivedFiles[fileIndex].progress = 100
     receivedFiles[fileIndex].receivedSize = blob.size
     
-    console.log(`✅ File received: ${receivedFiles[fileIndex].name} (${blob.size} bytes)`)
+    console.log(`✅ File received: ${receivedFiles[fileIndex].name} (${blob.size} bytes) - memory cleaned up`)
     
     fileTransfers.delete(transferId)
   }

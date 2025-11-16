@@ -109,6 +109,9 @@ class PigeonFSNode {
     this.files = new Map() // fileId -> buffer
     this.filesIndex = null // Book.js index for file search
     this.httpServer = null
+    this.activeDownloads = new Map() // Track active downloads per peer: peerId -> Set<fileId>
+    this.downloadTimeouts = new Map() // Track download timeouts: `${peerId}-${fileId}` -> timeout
+    this.processedChunkRequests = new Map() // Deduplicate chunk requests: `${peerId}-${fileId}-${chunkIndex}` -> timestamp
   }
 
   async initialize() {
@@ -236,8 +239,65 @@ class PigeonFSNode {
     // Announce availability
     this.announceAvailability()
     
-    // Periodic status updates
+    // Setup stream receiver for file uploads
+    this.pigeon.on('streamReceived', async (event) => {
+      const { peerId, stream, metadata } = event
+      console.log(`📥 Receiving stream upload: ${metadata.filename} (${this.formatSize(metadata.totalSize)}) from ${peerId.substring(0, 8)}`)
+      
+      try {
+        // Read stream chunks
+        const chunks = []
+        const reader = stream.getReader()
+        let received = 0
+        
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          
+          chunks.push(value)
+          received += value.length
+          
+          if (received % (1024 * 1024 * 10) === 0 || received === metadata.totalSize) {
+            const progress = ((received / metadata.totalSize) * 100).toFixed(1)
+            console.log(`📥 Upload progress: ${progress}% (${this.formatSize(received)}/${this.formatSize(metadata.totalSize)})`)
+          }
+        }
+        
+        // Concatenate chunks into single buffer
+        const buffer = Buffer.concat(chunks.map(chunk => Buffer.from(chunk)))
+        
+        // Add file to storage
+        const fileId = await this.addFile(metadata.filename, buffer)
+        
+        console.log(`✅ Stream upload complete: ${metadata.filename} (${this.formatSize(buffer.length)})`)
+        
+        // Force GC
+        if (global.gc) {
+          global.gc()
+          console.log('🧹 Forced GC after stream upload')
+        }
+        
+      } catch (error) {
+        console.error(`❌ Stream upload failed from ${peerId.substring(0, 8)}:`, error)
+      }
+    })
+    
+    // Periodic status updates and cleanup
     setInterval(() => this.logStatus(), 60000) // Every minute
+    setInterval(() => this.cleanupStaleUploads(), 5 * 60 * 1000) // Every 5 minutes
+    
+    // Force garbage collection periodically if available (Electron/Node with --expose-gc flag)
+    if (global.gc) {
+      setInterval(() => {
+        const before = process.memoryUsage().heapUsed
+        global.gc()
+        const after = process.memoryUsage().heapUsed
+        const freed = before - after
+        if (freed > 10 * 1024 * 1024) { // Only log if freed more than 10MB
+          console.log(`🧹 Garbage collection freed ${this.formatSize(freed)}`)
+        }
+      }, 2 * 60 * 1000) // Every 2 minutes
+    }
   }
 
   setupMessageHandlers() {
@@ -252,6 +312,15 @@ class PigeonFSNode {
     this.pigeon.on('peerDisconnected', (data) => {
       console.log(`👋 Peer disconnected: ${data.peerId?.substring(0, 8)}`)
       console.log(`   Total peers: ${this.pigeon.connectionManager.peers.size}`)
+      
+      // Clean up any active downloads for this peer
+      if (this.activeDownloads.has(data.peerId)) {
+        const fileIds = Array.from(this.activeDownloads.get(data.peerId))
+        console.log(`🧹 Cleaning up ${fileIds.length} active download(s) for disconnected peer`)
+        fileIds.forEach(fileId => {
+          this.cleanupDownload(data.peerId, fileId)
+        })
+      }
     })
     
     this.pigeon.on('messageReceived', async ({ from, content }) => {
@@ -268,6 +337,8 @@ class PigeonFSNode {
           await this.handleAvailabilityRequest(from)
         } else if (content.type === 'file-list-request') {
           await this.handleFileListRequest(from)
+        } else if (content.type === 'file-stream-request') {
+          await this.handleFileStreamRequest(from, content)
         } else if (content.type === 'file-chunk-request') {
           await this.handleFileChunkRequest(from, content)
         } else if (content.type === 'file-chunk-upload') {
@@ -629,32 +700,188 @@ class PigeonFSNode {
     console.log(`📤 Sent file list (${this.files.size} files) to ${fromPeerId.substring(0, 8)}`)
   }
 
-  async handleFileChunkRequest(fromPeerId, content) {
-    const { fileId, chunkIndex } = content
+  async handleFileStreamRequest(fromPeerId, content) {
+    const { fileId, fileName } = content
     const file = this.files.get(fileId)
-    
+
     if (!file) {
       console.log(`❌ File not found: ${fileId}`)
       return
     }
+
+    console.log(`📤 Streaming ${file.name} (${this.formatSize(file.size)}) to ${fromPeerId.substring(0, 8)}`)
+
+    try {
+      // Create a ReadableStream from the file buffer
+      const readable = new ReadableStream({
+        start(controller) {
+          controller.enqueue(file.buffer)
+          controller.close()
+        }
+      })
+
+      // Send the file as a stream using PeerPigeon's streaming API
+      await this.pigeon.sendStream(fromPeerId, readable, {
+        filename: file.name,
+        mimeType: file.type,
+        totalSize: file.size,
+        fileId: fileId
+      })
+
+      console.log(`✅ Streamed ${file.name} to ${fromPeerId.substring(0, 8)}`)
+    } catch (error) {
+      console.error(`❌ Failed to stream file to ${fromPeerId.substring(0, 8)}:`, error)
+    }
+  }
+
+  async handleFileChunkRequest(fromPeerId, content) {
+    const { fileId, chunkIndex } = content
+    const file = this.files.get(fileId)
+
+    if (!file) {
+      console.log(`❌ File not found: ${fileId}`)
+      return
+    }
+
+    // Deduplicate chunk requests (gossip can cause duplicates)
+    const requestKey = `${fromPeerId}-${fileId}-${chunkIndex}`
+    const now = Date.now()
+    const lastRequest = this.processedChunkRequests.get(requestKey)
     
+    // If we processed this exact request in the last 2 seconds, skip it
+    if (lastRequest && (now - lastRequest) < 2000) {
+      console.log(`⏭️  Skipping duplicate chunk request: ${chunkIndex} from ${fromPeerId.substring(0, 8)}`)
+      return
+    }
+    
+    // Mark this request as processed
+    this.processedChunkRequests.set(requestKey, now)
+    
+    // Clean up old request tracking (keep only last 30 seconds)
+    if (this.processedChunkRequests.size > 1000) {
+      for (const [key, timestamp] of this.processedChunkRequests.entries()) {
+        if (now - timestamp > 30000) {
+          this.processedChunkRequests.delete(key)
+        }
+      }
+    }
+
+    // Check if peer is still connected before sending
+    const peers = this.pigeon.connectionManager?.peers
+    if (!peers || !peers.has(fromPeerId)) {
+      console.warn(`⚠️  Peer ${fromPeerId.substring(0,8)} not connected. Aborting chunk send for ${fileId}`)
+      // Clean up any tracking for this peer
+      this.cleanupDownload(fromPeerId, fileId)
+      return
+    }
+
+    // Track active download
+    if (!this.activeDownloads.has(fromPeerId)) {
+      this.activeDownloads.set(fromPeerId, new Set())
+    }
+    this.activeDownloads.get(fromPeerId).add(fileId)
+
+    // Set/reset timeout for this download (5 minutes of inactivity)
+    const downloadKey = `${fromPeerId}-${fileId}`
+    if (this.downloadTimeouts.has(downloadKey)) {
+      clearTimeout(this.downloadTimeouts.get(downloadKey))
+    }
+    const timeout = setTimeout(() => {
+      console.log(`⏱️  Download timeout for ${fileId} to peer ${fromPeerId.substring(0,8)}`)
+      this.cleanupDownload(fromPeerId, fileId)
+    }, 5 * 60 * 1000) // 5 minutes
+    this.downloadTimeouts.set(downloadKey, timeout)
+
     const chunkSize = 64 * 1024 // 64KB chunks
     const start = chunkIndex * chunkSize
     const end = Math.min(start + chunkSize, file.buffer.length)
     const chunk = file.buffer.slice(start, end)
-    
+
+    // Send chunk with metadata - PeerPigeon will detect Uint8Array in content.chunk and handle it
     const response = {
       type: 'file-chunk',
       fileId,
       chunkIndex,
-      chunk: Array.from(chunk),
+      chunk: chunk, // Send as Uint8Array directly
       isLastChunk: end >= file.buffer.length
     }
-    
-    await this.pigeon.sendDirectMessage(fromPeerId, response)
-    
+
+    try {
+      await this.pigeon.sendDirectMessage(fromPeerId, response)
+      
+      // If this is the last chunk, clean up
+      if (response.isLastChunk) {
+        console.log(`✅ Completed sending ${file.name} to ${fromPeerId.substring(0,8)}`)
+        this.cleanupDownload(fromPeerId, fileId)
+      }
+    } catch (err) {
+      console.warn(`⚠️  Failed to send chunk ${chunkIndex} of ${file.name} to ${fromPeerId.substring(0,8)}:`, err.message)
+      // Clean up on error
+      this.cleanupDownload(fromPeerId, fileId)
+      return
+    }
+
     const progress = ((end / file.buffer.length) * 100).toFixed(1)
     console.log(`📤 Sent chunk ${chunkIndex} of ${file.name} to ${fromPeerId.substring(0, 8)} (${progress}%)`)
+  }
+
+  cleanupDownload(peerId, fileId) {
+    // Clear timeout
+    const downloadKey = `${peerId}-${fileId}`
+    if (this.downloadTimeouts.has(downloadKey)) {
+      clearTimeout(this.downloadTimeouts.get(downloadKey))
+      this.downloadTimeouts.delete(downloadKey)
+    }
+    
+    // Remove from active downloads
+    if (this.activeDownloads.has(peerId)) {
+      this.activeDownloads.get(peerId).delete(fileId)
+      if (this.activeDownloads.get(peerId).size === 0) {
+        this.activeDownloads.delete(peerId)
+      }
+    }
+  }
+
+  cleanupStaleUploads() {
+    if (!this.uploadingFiles || this.uploadingFiles.size === 0) return
+    
+    const now = Date.now()
+    const staleThreshold = 10 * 60 * 1000 // 10 minutes
+    let cleaned = 0
+    
+    for (const [fileId, upload] of this.uploadingFiles.entries()) {
+      const timeSinceLastChunk = now - upload.lastChunkTime
+      
+      if (timeSinceLastChunk > staleThreshold) {
+        console.warn(`🧹 Cleaning up stale upload: ${upload.fileName} (inactive for ${Math.round(timeSinceLastChunk / 60000)} minutes)`)
+        
+        // Clear timeout if exists
+        if (upload.timeoutId) {
+          clearTimeout(upload.timeoutId)
+        }
+        
+        // Delete temp file if it exists
+        if (upload.tempPath) {
+          fs.unlink(upload.tempPath).catch(() => {})
+        }
+        
+        // Free chunks array (old approach)
+        if (upload.chunks) {
+          upload.chunks = null
+        }
+        
+        this.uploadingFiles.delete(fileId)
+        cleaned++
+      }
+    }
+    
+    if (cleaned > 0) {
+      console.log(`🧹 Cleaned up ${cleaned} stale upload(s)`)
+      // Suggest garbage collection
+      if (global.gc) {
+        global.gc()
+      }
+    }
   }
 
   async handleFileChunkUpload(fromPeerId, content) {
@@ -667,14 +894,34 @@ class PigeonFSNode {
     
     if (chunkIndex === 0) {
       console.log(`📥 Starting upload: ${fileName} (${this.formatSize(fileSize)}) from ${fromPeerId.substring(0, 8)}`)
+      
+      // Create temporary file for streaming chunks
+      const tempPath = path.join(this.config.dataDir, 'temp', `upload-${fileId}`)
+      await fs.mkdir(path.dirname(tempPath), { recursive: true })
+      
       this.uploadingFiles.set(fileId, {
         fileName,
         fileSize,
         fileType,
-        chunks: [],
+        tempPath,
         receivedChunks: 0,
-        totalChunks
+        totalChunks,
+        startTime: Date.now(),
+        lastChunkTime: Date.now(),
+        chunkMap: new Set() // Track which chunks we've received
       })
+      
+      // Set timeout for incomplete uploads (10 minutes)
+      const timeoutId = setTimeout(() => {
+        if (this.uploadingFiles.has(fileId)) {
+          console.warn(`⏱️  Upload timeout for ${fileName} from ${fromPeerId.substring(0, 8)}`)
+          // Clean up temp file
+          fs.unlink(tempPath).catch(() => {})
+          this.uploadingFiles.delete(fileId)
+        }
+      }, 10 * 60 * 1000)
+      
+      this.uploadingFiles.get(fileId).timeoutId = timeoutId
     }
     
     const upload = this.uploadingFiles.get(fileId)
@@ -683,29 +930,75 @@ class PigeonFSNode {
       return
     }
     
-    // Store chunk
-    upload.chunks[chunkIndex] = Buffer.from(chunk)
-    upload.receivedChunks++
+    // Update last chunk time
+    upload.lastChunkTime = Date.now()
     
-    const progress = ((upload.receivedChunks / totalChunks) * 100).toFixed(1)
-    console.log(`📥 Received chunk ${chunkIndex + 1}/${totalChunks} of ${fileName} (${progress}%)`)
+    // Check if we already received this chunk
+    if (upload.chunkMap.has(chunkIndex)) {
+      console.warn(`⚠️ Chunk ${chunkIndex} already received, skipping`)
+      return
+    }
     
-    // If all chunks received, assemble the file
-    if (isLastChunk || upload.receivedChunks === totalChunks) {
-      const buffer = Buffer.concat(upload.chunks)
-      const actualFileId = await this.addFile(fileName, buffer)
+    // Write chunk directly to temp file (no memory accumulation!)
+    const chunkBuffer = Buffer.from(chunk)
+    const chunkSize = 64 * 1024
+    const offset = chunkIndex * chunkSize
+    
+    try {
+      const fileHandle = await fs.open(upload.tempPath, 'a')
+      await fileHandle.write(chunkBuffer, 0, chunkBuffer.length, offset)
+      await fileHandle.close()
       
-      console.log(`✅ Upload complete: ${fileName} (${this.formatSize(buffer.length)})`)
+      upload.chunkMap.add(chunkIndex)
+      upload.receivedChunks++
       
-      // Send confirmation
-      await this.pigeon.sendDirectMessage(fromPeerId, {
-        type: 'upload-complete',
-        fileId: actualFileId,
-        fileName,
-        success: true
-      })
+      const progress = ((upload.receivedChunks / totalChunks) * 100).toFixed(1)
       
-      // Clean up
+      if (upload.receivedChunks % 100 === 0 || upload.receivedChunks === totalChunks) {
+        const memUsage = process.memoryUsage()
+        console.log(`📥 Received chunk ${chunkIndex + 1}/${totalChunks} of ${fileName} (${progress}%) - Heap: ${this.formatSize(memUsage.heapUsed)}`)
+      }
+      
+      // If all chunks received, move temp file to final location
+      if (isLastChunk || upload.receivedChunks === totalChunks) {
+        // Clear timeout
+        if (upload.timeoutId) {
+          clearTimeout(upload.timeoutId)
+        }
+        
+        // Read the complete file from disk
+        const buffer = await fs.readFile(upload.tempPath)
+        
+        // Delete temp file immediately
+        await fs.unlink(upload.tempPath)
+        
+        const actualFileId = await this.addFile(fileName, buffer)
+        
+        const uploadTime = ((Date.now() - upload.startTime) / 1000).toFixed(1)
+        console.log(`✅ Upload complete: ${fileName} (${this.formatSize(buffer.length)}) in ${uploadTime}s`)
+        
+        // Send confirmation
+        await this.pigeon.sendDirectMessage(fromPeerId, {
+          type: 'upload-complete',
+          fileId: actualFileId,
+          fileName,
+          success: true
+        })
+        
+        // Clean up - force GC
+        this.uploadingFiles.delete(fileId)
+        if (global.gc) {
+          global.gc()
+          console.log('🧹 Forced GC after upload completion')
+        }
+      }
+    } catch (error) {
+      console.error(`❌ Error writing chunk ${chunkIndex}:`, error)
+      // Clean up on error
+      if (upload.timeoutId) {
+        clearTimeout(upload.timeoutId)
+      }
+      fs.unlink(upload.tempPath).catch(() => {})
       this.uploadingFiles.delete(fileId)
     }
   }
@@ -1298,6 +1591,7 @@ class PigeonFSNode {
   }
 
   logStatus() {
+    const mem = process.memoryUsage()
     console.log('\n📊 Status Update:')
     console.log(`   Peer ID: ${this.pigeon.peerId}`)
     console.log(`   Connected Peers: ${this.pigeon.connectionManager.peers.size}`)
@@ -1306,6 +1600,9 @@ class PigeonFSNode {
       console.log(`     - ${ds.name} (${hash.substring(0, 8)}...): ${ds.itemCount} items`)
     })
     console.log(`   Hosted Files: ${this.files.size}`)
+    console.log(`   Active Uploads: ${this.uploadingFiles?.size || 0}`)
+    console.log(`   Active Downloads: ${this.activeDownloads.size}`)
+    console.log(`   Memory: Heap ${this.formatSize(mem.heapUsed)} / ${this.formatSize(mem.heapTotal)} | RSS ${this.formatSize(mem.rss)}`)
     console.log('')
   }
 
