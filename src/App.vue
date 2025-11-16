@@ -2554,6 +2554,12 @@ const setupDatasetMessageHandlers = () => {
       const dl = downloadingFiles.value[fileId]
       if (dl && dl.mode === 'dataset') {
         try {
+          // Check if download is already complete or chunks array was cleared
+          if (!dl.chunks) {
+            console.warn(`⚠️ Received chunk ${chunkIndex} for already completed download: ${fileId}`)
+            return // Ignore chunks for completed downloads
+          }
+          
           // chunk will be Uint8Array if sent as binary, or array if not
           const chunkData = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk)
           
@@ -2581,7 +2587,7 @@ const setupDatasetMessageHandlers = () => {
           
           if (dl.size) {
             dl.progress = Math.min(100, Math.max(0, (dl.received / dl.size) * 100))
-          } else if (dl.totalChunks) {
+          } else if (dl.totalChunks && dl.chunks) {
             const receivedChunks = dl.chunks.filter(Boolean).length
             dl.progress = Math.min(100, Math.max(0, (receivedChunks / dl.totalChunks) * 100))
           }
