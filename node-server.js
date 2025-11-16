@@ -798,11 +798,15 @@ class PigeonFSNode {
     const chunk = file.buffer.slice(start, end)
 
     // Send chunk with metadata - PeerPigeon will detect Uint8Array in content.chunk and handle it
+    // IMPORTANT: send chunk as a plain array so it survives JSON serialization over gossip DM
+    // Buffer/Uint8Array would otherwise become an empty object and be received as 0-length
     const response = {
       type: 'file-chunk',
       fileId,
       chunkIndex,
-      chunk: chunk, // Send as Uint8Array directly
+      // Convert to number array for transport; client will reconstruct with new Uint8Array()
+      chunk: Array.from(chunk),
+      size: chunk.length,
       isLastChunk: end >= file.buffer.length
     }
 

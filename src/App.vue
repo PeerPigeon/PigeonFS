@@ -2387,11 +2387,21 @@ const p2pFileStats = computed(() => {
 
 // Download a file from a dataset search result
 const downloadDatasetFile = async (result) => {
+  console.log('🚀 downloadDatasetFile called with result:', result)
   try {
+    console.log('🔍 Parsing result.value:', result.value)
     const fileInfo = JSON.parse(result.value)
+    console.log('✅ Parsed fileInfo:', fileInfo)
     const fileId = fileInfo.id || fileInfo.name
     
+    console.log('🔍 FILE INFO:', fileInfo)
+    console.log('📏 File size:', fileInfo.size, 'Type:', typeof fileInfo.size)
+    
+    // Get all peers that have this file
+    const availablePeers = fileInfo.peerIds || [fileInfo.peerId].filter(Boolean)
+    
     console.log(`📥 Starting download for file: ${fileInfo.name}`)
+    console.log(`📡 Available peers: ${availablePeers.length} - ${availablePeers.map(p => p.substring(0, 8)).join(', ')}`)
     
     // Request file from server node
     if (!pigeon.value) {
@@ -2399,13 +2409,21 @@ const downloadDatasetFile = async (result) => {
       return
     }
     
+    if (!availablePeers || availablePeers.length === 0) {
+      alert('No peers found for this file')
+      console.error('File metadata missing peerId:', fileInfo)
+      return
+    }
+    
     // Initialize download tracking with metadata
     const CHUNK_SIZE = 64 * 1024
+    const totalChunks = fileInfo.size ? Math.ceil(fileInfo.size / CHUNK_SIZE) : undefined
+    
     downloadingFiles.value[fileId] = {
       name: fileInfo.name,
       type: fileInfo.type || 'application/octet-stream',
       size: fileInfo.size || 0,
-      totalChunks: fileInfo.size ? Math.ceil(fileInfo.size / CHUNK_SIZE) : undefined,
+      totalChunks: totalChunks,
       progress: 0,
       received: 0,
       speed: 0,
@@ -2413,19 +2431,52 @@ const downloadDatasetFile = async (result) => {
       lastSpeedUpdate: Date.now(),
       lastReceivedBytes: 0,
       chunks: [],
-      mode: 'dataset'
+      mode: 'dataset',
+      availablePeers: availablePeers, // All peers that have this file
+      chunkQueue: [], // Queue of chunks to request
+      requestedChunks: new Set(), // Track which chunks are in-flight
+      peerAssignments: new Map() // Track which peer is handling which chunk
     }
     
-    // Request file chunks from network
-    const chunkRequestMessage = {
-      type: 'file-chunk-request',
-      fileId: fileId,
-      chunkIndex: 0
+    console.log(`📊 Download initialized: size=${fileInfo.size}, totalChunks=${totalChunks}`)
+    
+    // Build chunk queue
+    const dl = downloadingFiles.value[fileId]
+    if (totalChunks) {
+      for (let i = 0; i < totalChunks; i++) {
+        dl.chunkQueue.push(i)
+      }
     }
     
-    // Broadcast request via gossip
-  await pigeon.value.gossipManager.broadcastMessage(JSON.stringify(chunkRequestMessage), 'chat')
-    console.log(`📤 Requested file chunks for: ${fileInfo.name}`)
+    // Start parallel downloads from multiple peers
+    // Distribute chunks across available peers
+    const chunksPerPeer = Math.ceil(totalChunks / availablePeers.length)
+    console.log(`🚀 Starting parallel download: ${totalChunks} chunks across ${availablePeers.length} peers`)
+    
+    for (let peerIndex = 0; peerIndex < availablePeers.length; peerIndex++) {
+      const peerId = availablePeers[peerIndex]
+      const startChunk = peerIndex * chunksPerPeer
+      const endChunk = Math.min(startChunk + chunksPerPeer, totalChunks)
+      
+      // Request this peer's chunk range
+      for (let chunkIndex = startChunk; chunkIndex < endChunk; chunkIndex++) {
+        if (dl.requestedChunks.has(chunkIndex)) continue
+        
+        dl.requestedChunks.add(chunkIndex)
+        dl.peerAssignments.set(chunkIndex, peerId)
+        
+        const chunkRequestMessage = {
+          type: 'file-chunk-request',
+          fileId: fileId,
+          chunkIndex: chunkIndex
+        }
+        
+        // Send direct message to this peer for this chunk
+        await pigeon.value.sendDirectMessage(peerId, chunkRequestMessage)
+      }
+    }
+    
+    console.log(`✅ Requested all ${totalChunks} chunks from ${availablePeers.length} peers`)
     
     // Note: File chunks will be received via messageReceived handler
     // which already handles 'file-chunk' messages and assembles them
@@ -2550,8 +2601,10 @@ const setupDatasetMessageHandlers = () => {
 
     // Handle incoming file chunk headers for dataset-initiated downloads
     if (parsedContent.type === 'file-chunk') {
+      console.log('🎯 MATCHED file-chunk handler!')
       const { fileId, chunkIndex, chunk, isLastChunk } = parsedContent
       const dl = downloadingFiles.value[fileId]
+      console.log('📦 Download state exists:', !!dl, 'Mode:', dl?.mode)
       if (dl && dl.mode === 'dataset') {
         try {
           // Check if download is already complete or chunks array was cleared
@@ -2562,15 +2615,13 @@ const setupDatasetMessageHandlers = () => {
           
           // chunk will be Uint8Array if sent as binary, or array if not
           const chunkData = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk)
-          
-          console.log(`📦 Received chunk ${chunkIndex} (${chunkData.length} bytes)`)
+          if (chunkData.length === 0) {
+            console.warn(`⚠️ Received zero-length chunk at index ${chunkIndex} for file ${dl.name}`)
+          }
           
           // Only add to received if this chunk wasn't already counted
-          const existingChunk = dl.chunks[chunkIndex]
-          if (!existingChunk) {
+          if (!dl.chunks[chunkIndex]) {
             dl.received += chunkData.length
-          } else {
-            console.warn(`⚠️ Chunk ${chunkIndex} already exists, not double-counting`)
           }
           
           dl.chunks[chunkIndex] = chunkData
@@ -2585,25 +2636,52 @@ const setupDatasetMessageHandlers = () => {
             dl.lastReceivedBytes = dl.received
           }
           
-          if (dl.size) {
+          // Calculate progress
+          if (dl.size > 0) {
             dl.progress = Math.min(100, Math.max(0, (dl.received / dl.size) * 100))
-          } else if (dl.totalChunks && dl.chunks) {
+          } else if (dl.totalChunks) {
             const receivedChunks = dl.chunks.filter(Boolean).length
             dl.progress = Math.min(100, Math.max(0, (receivedChunks / dl.totalChunks) * 100))
           }
           
-          // Request next chunk or finish
-          if (!isLastChunk) {
-            const nextIndex = chunkIndex + 1
-            const req = {
-              type: 'file-chunk-request',
-              fileId,
-              chunkIndex: nextIndex
+          // Force Vue reactivity with nextTick
+          nextTick(() => {
+            downloadingFiles.value = { ...downloadingFiles.value }
+          })
+          
+          // Check if all chunks are received
+          const allChunksReceived = dl.totalChunks && dl.chunks.filter(Boolean).length === dl.totalChunks
+          
+          // If all chunks received, assemble and download
+          if (allChunksReceived || isLastChunk) {
+            // Prevent double-assembly - check if already assembling
+            if (dl.assembling) {
+              console.log(`⏭️ Already assembling ${dl.name}, skipping duplicate trigger`)
+              return
             }
-            await pigeon.value.sendDirectMessage(from, req)
-          } else {
+            
+            // Mark as assembling to prevent duplicates
+            dl.assembling = true
+            downloadingFiles.value[fileId].assembling = true
+            
             // Assemble and trigger download
             console.log(`✅ All chunks received for ${dl.name}, assembling...`)
+            
+            // Verify we have all chunks
+            const missingChunks = []
+            for (let i = 0; i < dl.totalChunks; i++) {
+              if (!dl.chunks[i]) {
+                missingChunks.push(i)
+              }
+            }
+            
+            if (missingChunks.length > 0) {
+              console.warn(`⚠️ Missing ${missingChunks.length} chunks:`, missingChunks.slice(0, 10))
+              // Reset assembling flag
+              dl.assembling = false
+              downloadingFiles.value[fileId].assembling = false
+              return
+            }
             const blob = new Blob(dl.chunks, { type: dl.type })
             
             // Clear chunks array immediately to free memory
@@ -2836,7 +2914,22 @@ const setupDatasetMessageHandlers = () => {
     } else if (parsedContent.type === 'dataset-search-response') {
       // Received search results from peer
       if (parsedContent.results && parsedContent.results.length > 0) {
-        const peerResults = parsedContent.results.map(r => ({ ...r, source: 'peer' }))
+        // Add peerId to each result so we know which peer to request files from
+        const peerResults = parsedContent.results.map(r => {
+          const result = { ...r, source: 'peer' }
+          // If it's a file result, add peerId to the value JSON
+          try {
+            const parsed = JSON.parse(r.value)
+            if (parsed && (parsed.id || parsed.name || parsed.size)) {
+              // It's a file - add peerId to the metadata
+              parsed.peerId = from
+              result.value = JSON.stringify(parsed)
+            }
+          } catch {
+            // Not JSON, leave as-is
+          }
+          return result
+        })
         searchResults.value = [...searchResults.value, ...peerResults]
         searchPeerResults.value += parsedContent.results.length
         
@@ -2844,21 +2937,55 @@ const setupDatasetMessageHandlers = () => {
         const seen = new Map()
         for (const result of searchResults.value) {
           let dedupKey = result.key
+          let isFileResult = false
+          let peerId = null
           
-          // For file results (JSON values with id/name), deduplicate by file ID
+          // For file results (JSON values with id/name), track all peers that have it
           try {
             const parsed = JSON.parse(result.value)
             if (parsed && (parsed.id || parsed.name)) {
               dedupKey = parsed.id || parsed.name // Use file ID for file results
+              isFileResult = true
+              peerId = parsed.peerId
             }
           } catch {
             // Not JSON or not a file - use key as-is (e.g., Bible verses)
           }
           
           const existing = seen.get(dedupKey)
-          // Keep the result with the highest score
-          if (!existing || (result.score || 0) > (existing.score || 0)) {
-            seen.set(dedupKey, result)
+          
+          if (isFileResult && existing) {
+            // For files, merge peer information
+            try {
+              const existingParsed = JSON.parse(existing.value)
+              const currentParsed = JSON.parse(result.value)
+              
+              // Track all peers that have this file
+              if (!existingParsed.peerIds) {
+                existingParsed.peerIds = [existingParsed.peerId].filter(Boolean)
+              }
+              if (peerId && !existingParsed.peerIds.includes(peerId)) {
+                existingParsed.peerIds.push(peerId)
+              }
+              
+              // Keep the result with the highest score, but preserve peer list
+              if ((result.score || 0) > (existing.score || 0)) {
+                currentParsed.peerIds = existingParsed.peerIds
+                seen.set(dedupKey, { ...result, value: JSON.stringify(currentParsed) })
+              } else {
+                seen.set(dedupKey, { ...existing, value: JSON.stringify(existingParsed) })
+              }
+            } catch (e) {
+              // If merging fails, keep the higher score
+              if (!existing || (result.score || 0) > (existing.score || 0)) {
+                seen.set(dedupKey, result)
+              }
+            }
+          } else {
+            // For non-files, keep the result with the highest score
+            if (!existing || (result.score || 0) > (existing.score || 0)) {
+              seen.set(dedupKey, result)
+            }
           }
         }
         searchResults.value = Array.from(seen.values())
