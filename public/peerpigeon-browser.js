@@ -3155,31 +3155,8 @@ ${b64.match(/.{1,64}/g).join("\n")}
     }
   });
 
-  // node_modules/@koush/wrtc/lib/browser.js
-  var require_browser = __commonJS({
-    "node_modules/@koush/wrtc/lib/browser.js"(exports) {
-      "use strict";
-      exports.MediaStream = window.MediaStream;
-      exports.MediaStreamTrack = window.MediaStreamTrack;
-      exports.RTCDataChannel = window.RTCDataChannel;
-      exports.RTCDataChannelEvent = window.RTCDataChannelEvent;
-      exports.RTCDtlsTransport = window.RTCDtlsTransport;
-      exports.RTCIceCandidate = window.RTCIceCandidate;
-      exports.RTCIceTransport = window.RTCIceTransport;
-      exports.RTCPeerConnection = window.RTCPeerConnection;
-      exports.RTCPeerConnectionIceEvent = window.RTCPeerConnectionIceEvent;
-      exports.RTCRtpReceiver = window.RTCRtpReceiver;
-      exports.RTCRtpSender = window.RTCRtpSender;
-      exports.RTCRtpTransceiver = window.RTCRtpTransceiver;
-      exports.RTCSctpTransport = window.RTCSctpTransport;
-      exports.RTCSessionDescription = window.RTCSessionDescription;
-      exports.getUserMedia = window.getUserMedia;
-      exports.mediaDevices = navigator.mediaDevices;
-    }
-  });
-
   // node_modules/ws/browser.js
-  var require_browser2 = __commonJS({
+  var require_browser = __commonJS({
     "node_modules/ws/browser.js"(exports, module) {
       "use strict";
       module.exports = function() {
@@ -3204,11 +3181,184 @@ ${b64.match(/.{1,64}/g).join("\n")}
     getEnvironmentReport: () => getEnvironmentReport,
     hasWebRTC: () => hasWebRTC,
     hasWebSocket: () => hasWebSocket,
+    initWebRTCAsync: () => initWebRTCAsync,
     isBrowser: () => isBrowser2,
     isNodeJS: () => isNodeJS,
     isWorker: () => isWorker
   });
   init_unsea();
+
+  // src/PigeonRTC-browser.js
+  var RTCAdapter = class {
+    getRTCPeerConnection() {
+      throw new Error("getRTCPeerConnection must be implemented by adapter");
+    }
+    getRTCSessionDescription() {
+      throw new Error("getRTCSessionDescription must be implemented by adapter");
+    }
+    getRTCIceCandidate() {
+      throw new Error("getRTCIceCandidate must be implemented by adapter");
+    }
+    getMediaStream() {
+      return null;
+    }
+    isSupported() {
+      throw new Error("isSupported must be implemented by adapter");
+    }
+    getName() {
+      throw new Error("getName must be implemented by adapter");
+    }
+    async initialize() {
+    }
+    async getUserMedia(_constraints) {
+      throw new Error("getUserMedia not supported by this adapter");
+    }
+    async getDisplayMedia(_constraints) {
+      throw new Error("getDisplayMedia not supported by this adapter");
+    }
+  };
+  var BrowserRTCAdapter = class extends RTCAdapter {
+    constructor() {
+      super();
+      this._checkSupport();
+    }
+    _checkSupport() {
+      if (typeof window === "undefined" || typeof navigator === "undefined") {
+        return;
+      }
+      this.hasRTCPeerConnection = !!(window.RTCPeerConnection || window.webkitRTCPeerConnection || window.mozRTCPeerConnection);
+      this.hasGetUserMedia = !!(navigator.mediaDevices?.getUserMedia || navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia);
+      this.hasGetDisplayMedia = !!navigator.mediaDevices?.getDisplayMedia;
+    }
+    getRTCPeerConnection() {
+      if (typeof window === "undefined") {
+        throw new Error("BrowserRTCAdapter requires a browser environment");
+      }
+      return window.RTCPeerConnection || window.webkitRTCPeerConnection || window.mozRTCPeerConnection;
+    }
+    getRTCSessionDescription() {
+      if (typeof window === "undefined") {
+        throw new Error("BrowserRTCAdapter requires a browser environment");
+      }
+      return window.RTCSessionDescription || window.mozRTCSessionDescription;
+    }
+    getRTCIceCandidate() {
+      if (typeof window === "undefined") {
+        throw new Error("BrowserRTCAdapter requires a browser environment");
+      }
+      return window.RTCIceCandidate || window.mozRTCIceCandidate;
+    }
+    getMediaStream() {
+      if (typeof window === "undefined") {
+        return null;
+      }
+      return window.MediaStream || window.webkitMediaStream;
+    }
+    isSupported() {
+      return typeof window !== "undefined" && this.hasRTCPeerConnection;
+    }
+    getName() {
+      return "BrowserRTCAdapter";
+    }
+    async getUserMedia(constraints) {
+      if (typeof navigator === "undefined") {
+        throw new Error("getUserMedia requires a browser environment");
+      }
+      if (navigator.mediaDevices?.getUserMedia) {
+        return await navigator.mediaDevices.getUserMedia(constraints);
+      }
+      const getUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
+      if (!getUserMedia) {
+        throw new Error("getUserMedia is not supported in this browser");
+      }
+      return new Promise((resolve, reject) => {
+        getUserMedia.call(navigator, constraints, resolve, reject);
+      });
+    }
+    async getDisplayMedia(constraints) {
+      if (typeof navigator === "undefined") {
+        throw new Error("getDisplayMedia requires a browser environment");
+      }
+      if (!navigator.mediaDevices?.getDisplayMedia) {
+        throw new Error("getDisplayMedia is not supported in this browser");
+      }
+      return await navigator.mediaDevices.getDisplayMedia(constraints);
+    }
+  };
+  var PigeonRTC = class {
+    constructor(options = {}) {
+      this.adapter = options.adapter || null;
+      this.initialized = false;
+    }
+    async initialize(options = {}) {
+      if (this.initialized) {
+        return;
+      }
+      if (options.adapter) {
+        this.adapter = options.adapter;
+      }
+      if (!this.adapter) {
+        this.adapter = new BrowserRTCAdapter();
+      }
+      await this.adapter.initialize();
+      this.initialized = true;
+    }
+    _ensureInitialized() {
+      if (!this.initialized || !this.adapter) {
+        throw new Error("PigeonRTC not initialized. Call initialize() first.");
+      }
+    }
+    getRTCPeerConnection() {
+      this._ensureInitialized();
+      return this.adapter.getRTCPeerConnection();
+    }
+    getRTCSessionDescription() {
+      this._ensureInitialized();
+      return this.adapter.getRTCSessionDescription();
+    }
+    getRTCIceCandidate() {
+      this._ensureInitialized();
+      return this.adapter.getRTCIceCandidate();
+    }
+    getMediaStream() {
+      this._ensureInitialized();
+      return this.adapter.getMediaStream();
+    }
+    createPeerConnection(config) {
+      this._ensureInitialized();
+      const RTCPeerConnection2 = this.adapter.getRTCPeerConnection();
+      return new RTCPeerConnection2(config);
+    }
+    createSessionDescription(init) {
+      this._ensureInitialized();
+      const RTCSessionDescription = this.adapter.getRTCSessionDescription();
+      return new RTCSessionDescription(init);
+    }
+    createIceCandidate(init) {
+      this._ensureInitialized();
+      const RTCIceCandidate = this.adapter.getRTCIceCandidate();
+      return new RTCIceCandidate(init);
+    }
+    async getUserMedia(constraints) {
+      this._ensureInitialized();
+      return await this.adapter.getUserMedia(constraints);
+    }
+    async getDisplayMedia(constraints) {
+      this._ensureInitialized();
+      return await this.adapter.getDisplayMedia(constraints);
+    }
+    isSupported() {
+      return this.adapter ? this.adapter.isSupported() : false;
+    }
+    getAdapterName() {
+      return this.adapter ? this.adapter.getName() : "None";
+    }
+  };
+  async function createPigeonRTC(options = {}) {
+    const rtc = new PigeonRTC(options);
+    await rtc.initialize(options);
+    return rtc;
+  }
 
   // src/EventEmitter.js
   var EventEmitter = class {
@@ -3311,6 +3461,7 @@ ${b64.match(/.{1,64}/g).join("\n")}
   var EnvironmentDetector = class _EnvironmentDetector {
     constructor() {
       this._cache = /* @__PURE__ */ new Map();
+      this._pigeonRTC = null;
       this._init();
     }
     _init() {
@@ -3323,44 +3474,25 @@ ${b64.match(/.{1,64}/g).join("\n")}
       this._cache.set("isDeno", this._detectDeno());
       this._cache.set("isBun", this._detectBun());
       this._cache.set("isNativeScript", this._detectNativeScript());
-      if (this._cache.get("isNodeJS")) {
-        this._initNodeWebRTC();
+      this._initPigeonRTC();
+    }
+    /**
+     * Initialize PigeonRTC for cross-platform WebRTC support
+     * PigeonRTC provides a unified WebRTC interface across browser and Node.js
+     * @private
+     */
+    _initPigeonRTC() {
+      try {
+        this._webrtcPolyfilled = false;
+      } catch (error) {
       }
     }
     /**
-     * Initialize WebRTC polyfill for Node.js environment
-     * Attempts to load @koush/wrtc and set up WebRTC globals
-     * @private
+     * Get the PigeonRTC instance
+     * @returns {PigeonRTC|null} The PigeonRTC instance or null if not initialized
      */
-    _initNodeWebRTC() {
-      try {
-        if (typeof globalThis !== "undefined" && typeof globalThis.RTCPeerConnection !== "undefined") {
-          return;
-        }
-        let wrtc;
-        if (typeof __require !== "undefined") {
-          try {
-            wrtc = require_browser();
-          } catch (e) {
-            try {
-              wrtc = __require("node-webrtc");
-            } catch (e2) {
-              return;
-            }
-          }
-        } else {
-          return;
-        }
-        if (wrtc && typeof globalThis !== "undefined") {
-          globalThis.RTCPeerConnection = wrtc.RTCPeerConnection;
-          globalThis.RTCSessionDescription = wrtc.RTCSessionDescription;
-          globalThis.RTCIceCandidate = wrtc.RTCIceCandidate;
-          globalThis.MediaStream = wrtc.MediaStream || globalThis.MediaStream;
-          globalThis.MediaStreamTrack = wrtc.MediaStreamTrack || globalThis.MediaStreamTrack;
-          this._webrtcPolyfilled = true;
-        }
-      } catch (error) {
-      }
+    getPigeonRTC() {
+      return this._pigeonRTC;
     }
     // Primary environment detection
     _detectBrowser() {
@@ -3426,6 +3558,9 @@ ${b64.match(/.{1,64}/g).join("\n")}
     }
     // WebRTC capability detection
     get hasWebRTC() {
+      if (this._pigeonRTC) {
+        return this._pigeonRTC.isSupported();
+      }
       if (this.isBrowser) {
         return typeof RTCPeerConnection !== "undefined" || typeof webkitRTCPeerConnection !== "undefined" || typeof mozRTCPeerConnection !== "undefined";
       }
@@ -3718,40 +3853,39 @@ ${b64.match(/.{1,64}/g).join("\n")}
       };
     }
     /**
-     * Asynchronously initialize WebRTC polyfill for Node.js environment
-     * This method is useful for ES module environments where dynamic imports are preferred
+     * Asynchronously initialize WebRTC using PigeonRTC
+     * This method initializes PigeonRTC for cross-platform WebRTC support
      * @returns {Promise<boolean>} True if WebRTC was successfully initialized
      */
     async initWebRTCAsync() {
-      if (!this.isNodeJS) {
-        return false;
-      }
       try {
-        if (typeof globalThis !== "undefined" && typeof globalThis.RTCPeerConnection !== "undefined") {
+        if (this._pigeonRTC) {
           return true;
         }
-        let wrtc;
-        try {
-          wrtc = await Promise.resolve().then(() => __toESM(require_browser(), 1));
-        } catch (e) {
+        let createPigeonRTC2;
+        if (typeof globalThis !== "undefined" && globalThis.__PEERPIGEON_PIGEONRTC__) {
+          createPigeonRTC2 = globalThis.__PEERPIGEON_PIGEONRTC__.createPigeonRTC || globalThis.__PEERPIGEON_PIGEONRTC__.default;
+        } else if (typeof window !== "undefined" && window.__PEERPIGEON_PIGEONRTC__) {
+          createPigeonRTC2 = window.__PEERPIGEON_PIGEONRTC__.createPigeonRTC || window.__PEERPIGEON_PIGEONRTC__.default;
+        }
+        if (!createPigeonRTC2 && this.isNodeJS) {
           try {
-            wrtc = await import("node-webrtc");
-          } catch (e2) {
-            return false;
+            const pigeonRTCModule = await import("pigeonrtc");
+            createPigeonRTC2 = pigeonRTCModule.createPigeonRTC || pigeonRTCModule.default;
+          } catch (error) {
+            console.error("Failed to dynamically import PigeonRTC:", error);
           }
         }
-        if (wrtc && typeof globalThis !== "undefined") {
-          globalThis.RTCPeerConnection = wrtc.RTCPeerConnection || wrtc.default?.RTCPeerConnection;
-          globalThis.RTCSessionDescription = wrtc.RTCSessionDescription || wrtc.default?.RTCSessionDescription;
-          globalThis.RTCIceCandidate = wrtc.RTCIceCandidate || wrtc.default?.RTCIceCandidate;
-          globalThis.MediaStream = wrtc.MediaStream || wrtc.default?.MediaStream || globalThis.MediaStream;
-          globalThis.MediaStreamTrack = wrtc.MediaStreamTrack || wrtc.default?.MediaStreamTrack || globalThis.MediaStreamTrack;
-          this._webrtcPolyfilled = true;
-          return true;
+        if (!createPigeonRTC2) {
+          throw new Error("PigeonRTC createPigeonRTC function not found");
         }
+        this._pigeonRTC = await createPigeonRTC2();
+        this._webrtcPolyfilled = true;
+        return this._pigeonRTC.isSupported();
       } catch (error) {
+        console.error("Failed to initialize PigeonRTC:", error);
+        return false;
       }
-      return false;
     }
     // Static method for quick environment check
     static detect() {
@@ -3770,6 +3904,7 @@ ${b64.match(/.{1,64}/g).join("\n")}
   var hasWebRTC = () => environmentDetector.hasWebRTC;
   var hasWebSocket = () => environmentDetector.hasWebSocket;
   var getEnvironmentReport = () => environmentDetector.getEnvironmentReport();
+  var initWebRTCAsync = () => environmentDetector.initWebRTCAsync();
 
   // src/DebugLogger.js
   var DebugLogger = class {
@@ -3954,6 +4089,7 @@ ${b64.match(/.{1,64}/g).join("\n")}
       this.connectionPromise = null;
       this.reconnectTimeout = null;
       this.isReconnecting = false;
+      this.deliberateDisconnect = false;
     }
     setConnectionType(type) {
       this.debug.log(`WebSocket-only implementation - connection type setting ignored: ${type}`);
@@ -3968,7 +4104,7 @@ ${b64.match(/.{1,64}/g).join("\n")}
         }
         try {
           if (typeof __require !== "undefined") {
-            const WebSocket2 = require_browser2();
+            const WebSocket2 = require_browser();
             return new WebSocket2(url);
           } else {
             this.debug.warn('WebSocket package detection not available in ES modules. Ensure "ws" is installed.');
@@ -4091,13 +4227,14 @@ ${b64.match(/.{1,64}/g).join("\n")}
             this.connected = false;
             this.connectionPromise = null;
             this.debug.log("WebSocket closed:", event.code, event.reason);
-            if (event.code === 1e3) {
-              this.emit("disconnected");
-            } else {
+            this.emit("disconnected");
+            if (!this.deliberateDisconnect) {
               this.emit("statusChanged", { type: "warning", message: "WebSocket connection lost - reconnecting..." });
               if (!this.isReconnecting) {
                 this.attemptReconnect();
               }
+            } else {
+              this.deliberateDisconnect = false;
             }
           };
           this.websocket.onerror = (error) => {
@@ -4165,6 +4302,7 @@ ${b64.match(/.{1,64}/g).join("\n")}
       }, delay);
     }
     disconnect() {
+      this.deliberateDisconnect = true;
       this.isReconnecting = false;
       if (this.reconnectTimeout) {
         clearTimeout(this.reconnectTimeout);
@@ -4476,6 +4614,10 @@ ${b64.match(/.{1,64}/g).join("\n")}
       this.isClosing = false;
       this.iceTimeoutId = null;
       this._forcedStatus = null;
+      this._pendingBinaryPayloads = [];
+      this._activeStreams = /* @__PURE__ */ new Map();
+      this._streamChunks = /* @__PURE__ */ new Map();
+      this._streamMetadata = /* @__PURE__ */ new Map();
       this.localStream = options.localStream || null;
       this.remoteStream = null;
       this.enableVideo = options.enableVideo || false;
@@ -4501,7 +4643,13 @@ ${b64.match(/.{1,64}/g).join("\n")}
         this.emit("connectionFailed", { peerId: this.peerId, reason: error.message });
         throw error;
       }
-      this.connection = new RTCPeerConnection({
+      const pigeonRTC = environmentDetector.getPigeonRTC();
+      if (!pigeonRTC) {
+        const error = new Error("PigeonRTC not initialized - call initWebRTCAsync() first");
+        this.emit("connectionFailed", { peerId: this.peerId, reason: error.message });
+        throw error;
+      }
+      this.connection = pigeonRTC.createPeerConnection({
         iceServers: [
           { urls: "stun:stun.l.google.com:19302" },
           { urls: "stun:stun1.l.google.com:19302" },
@@ -4707,6 +4855,11 @@ ${b64.match(/.{1,64}/g).join("\n")}
       };
     }
     setupDataChannel() {
+      if (!this.dataChannel) {
+        this.debug.error("setupDataChannel called without data channel instance");
+        return;
+      }
+      this.dataChannel.binaryType = "arraybuffer";
       this.dataChannel.onopen = () => {
         this.debug.log(`Data channel opened with ${this.peerId}`);
         this.dataChannelReady = true;
@@ -4715,13 +4868,60 @@ ${b64.match(/.{1,64}/g).join("\n")}
       this.dataChannel.onclose = () => {
         this.debug.log(`Data channel closed with ${this.peerId}`);
         this.dataChannelReady = false;
+        this._pendingBinaryPayloads.length = 0;
         if (!this.isClosing) {
           this.emit("disconnected", { peerId: this.peerId, reason: "data channel closed" });
         }
       };
       this.dataChannel.onmessage = (event) => {
+        const handleBinaryPayload = (buffer) => {
+          if (!buffer) return;
+          if (this._pendingBinaryPayloads.length === 0) {
+            this.debug.warn("Received unexpected binary payload without metadata");
+            return;
+          }
+          const payload = this._pendingBinaryPayloads.shift();
+          const uint8Array = new Uint8Array(buffer);
+          if (payload.type === "binaryMessage") {
+            if (payload.size && payload.size !== uint8Array.byteLength) {
+              this.debug.warn(`Binary message size mismatch: expected ${payload.size}, got ${uint8Array.byteLength}`);
+            }
+            this.debug.log(`\u{1F4E6} Received binary message (${uint8Array.byteLength} bytes) from ${this.peerId.substring(0, 8)}...`);
+            this.emit("message", {
+              peerId: this.peerId,
+              message: {
+                type: "binary",
+                data: uint8Array,
+                size: uint8Array.byteLength
+              }
+            });
+            return;
+          }
+          if (payload.type === "streamChunk") {
+            this._handleStreamChunkBinary(payload.header, uint8Array);
+            return;
+          }
+          this.debug.warn(`Received binary payload with unknown handler type: ${payload.type}`);
+        };
+        if (event.data instanceof ArrayBuffer) {
+          handleBinaryPayload(event.data);
+          return;
+        }
+        if (typeof Blob !== "undefined" && event.data instanceof Blob) {
+          event.data.arrayBuffer().then(handleBinaryPayload).catch((error) => this.debug.error("Failed to read binary payload:", error));
+          return;
+        }
         try {
           const message = JSON.parse(event.data);
+          if (message.type === "__BINARY__") {
+            this._pendingBinaryPayloads.push({ type: "binaryMessage", size: message.size });
+            this.debug.log(`\u{1F4E6} Binary message header received, expecting ${message.size} bytes`);
+            return;
+          }
+          if (message.type && message.type.startsWith("__STREAM_")) {
+            this._handleStreamMessage(message);
+            return;
+          }
           this.emit("message", { peerId: this.peerId, message });
         } catch (error) {
           this.debug.error("Failed to parse message:", error);
@@ -4731,6 +4931,7 @@ ${b64.match(/.{1,64}/g).join("\n")}
       this.dataChannel.onerror = (error) => {
         this.debug.error(`Data channel error with ${this.peerId}:`, error);
         this.dataChannelReady = false;
+        this._pendingBinaryPayloads.length = 0;
         if (!this.isClosing) {
           this.emit("disconnected", { peerId: this.peerId, reason: "data channel error" });
         }
@@ -4954,14 +5155,263 @@ ${b64.match(/.{1,64}/g).join("\n")}
     sendMessage(message) {
       if (this.dataChannel && this.dataChannel.readyState === "open") {
         try {
-          this.dataChannel.send(JSON.stringify(message));
-          return true;
+          if (message instanceof ArrayBuffer || ArrayBuffer.isView(message)) {
+            this.debug.log(`\u{1F4E6} Sending binary message (${message.byteLength || message.buffer.byteLength} bytes) to ${this.peerId.substring(0, 8)}...`);
+            const buffer = ArrayBuffer.isView(message) ? message.buffer : message;
+            const header = JSON.stringify({ type: "__BINARY__", size: buffer.byteLength });
+            this.dataChannel.send(header);
+            this.dataChannel.send(buffer);
+            return true;
+          } else {
+            this.dataChannel.send(JSON.stringify(message));
+            return true;
+          }
         } catch (error) {
           this.debug.error(`Failed to send message to ${this.peerId}:`, error);
           return false;
         }
       }
       return false;
+    }
+    /**
+     * Create a WritableStream for sending data to this peer
+     * @param {object} options - Stream options
+     * @returns {WritableStream} A writable stream for sending data
+     */
+    createWritableStream(options = {}) {
+      const streamId = options.streamId || this._generateStreamId();
+      const metadata = {
+        streamId,
+        type: options.type || "binary",
+        filename: options.filename,
+        mimeType: options.mimeType,
+        totalSize: options.totalSize,
+        chunkSize: options.chunkSize,
+        timestamp: Date.now()
+      };
+      this.debug.log(`\u{1F4E4} Creating writable stream ${streamId} to ${this.peerId.substring(0, 8)}...`);
+      const configuredChunkSize = typeof metadata.chunkSize === "number" && Number.isFinite(metadata.chunkSize) ? metadata.chunkSize : 16384;
+      const chunkSize = Math.max(4096, Math.min(configuredChunkSize, 65536));
+      metadata.chunkSize = chunkSize;
+      const highWaterMark = chunkSize * 32;
+      const lowWaterMark = chunkSize * 8;
+      const ensureChannelOpen = () => {
+        if (!this.dataChannel || this.dataChannel.readyState !== "open") {
+          throw new Error("Data channel not open");
+        }
+      };
+      const waitForBufferDrain = () => {
+        if (!this.dataChannel || this.dataChannel.readyState !== "open") {
+          return Promise.resolve();
+        }
+        if (this.dataChannel.bufferedAmount <= lowWaterMark) {
+          return Promise.resolve();
+        }
+        return new Promise((resolve) => {
+          const checkBuffer = () => {
+            if (!this.dataChannel || this.dataChannel.readyState !== "open") {
+              resolve();
+              return;
+            }
+            if (this.dataChannel.bufferedAmount <= lowWaterMark) {
+              resolve();
+            } else {
+              setTimeout(checkBuffer, 20);
+            }
+          };
+          checkBuffer();
+        });
+      };
+      this.sendMessage({
+        type: "__STREAM_INIT__",
+        streamId,
+        metadata
+      });
+      let chunkIndex = 0;
+      const self2 = this;
+      return new WritableStream({
+        async write(chunk) {
+          ensureChannelOpen();
+          const data = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+          let offset = 0;
+          while (offset < data.byteLength) {
+            ensureChannelOpen();
+            const sliceEnd = Math.min(offset + chunkSize, data.byteLength);
+            const slice = data.subarray(offset, sliceEnd);
+            const sliceBuffer = slice.byteOffset === 0 && slice.byteLength === slice.buffer.byteLength ? slice.buffer : slice.buffer.slice(slice.byteOffset, slice.byteOffset + slice.byteLength);
+            const chunkMessage = {
+              type: "__STREAM_CHUNK__",
+              streamId,
+              chunkIndex: chunkIndex++,
+              size: slice.byteLength,
+              encoding: "binary"
+            };
+            try {
+              self2.dataChannel.send(JSON.stringify(chunkMessage));
+              self2.dataChannel.send(sliceBuffer);
+            } catch (error) {
+              throw error;
+            }
+            offset = sliceEnd;
+            if (self2.dataChannel && self2.dataChannel.bufferedAmount > highWaterMark) {
+              await waitForBufferDrain();
+            }
+          }
+        },
+        async close() {
+          if (self2.dataChannel && self2.dataChannel.readyState === "open") {
+            await waitForBufferDrain();
+            self2.sendMessage({
+              type: "__STREAM_END__",
+              streamId,
+              totalChunks: chunkIndex
+            });
+          }
+          self2._activeStreams.delete(streamId);
+          self2.debug.log(`\u{1F4E4} Closed writable stream ${streamId}`);
+        },
+        async abort(reason) {
+          if (self2.dataChannel && self2.dataChannel.readyState === "open") {
+            self2.sendMessage({
+              type: "__STREAM_ABORT__",
+              streamId,
+              reason: reason?.message || "Stream aborted"
+            });
+          }
+          self2._activeStreams.delete(streamId);
+          self2.debug.log(`\u274C Aborted writable stream ${streamId}: ${reason}`);
+        }
+      });
+    }
+    /**
+     * Handle incoming stream messages and create ReadableStream
+     * @private
+     */
+    _handleStreamMessage(message) {
+      const { type } = message;
+      switch (type) {
+        case "__STREAM_INIT__":
+          this._handleStreamInit(message);
+          break;
+        case "__STREAM_CHUNK__":
+          if (message.encoding === "binary") {
+            this._pendingBinaryPayloads.push({
+              type: "streamChunk",
+              header: message
+            });
+          } else {
+            this._handleStreamChunkLegacy(message);
+          }
+          break;
+        case "__STREAM_END__":
+          this._handleStreamEnd(message);
+          break;
+        case "__STREAM_ABORT__":
+          this._handleStreamAbort(message);
+          break;
+      }
+    }
+    _handleStreamInit(message) {
+      const { streamId, metadata } = message;
+      this.debug.log(`\u{1F4E5} Receiving stream ${streamId} from ${this.peerId.substring(0, 8)}...`);
+      this._streamMetadata.set(streamId, metadata);
+      this._streamChunks.set(streamId, []);
+      const chunks = this._streamChunks.get(streamId);
+      let controller;
+      const readable = new ReadableStream({
+        start(ctrl) {
+          controller = ctrl;
+        },
+        cancel: (reason) => {
+          this.debug.log(`\u{1F4E5} Stream ${streamId} cancelled: ${reason}`);
+        }
+      });
+      this._activeStreams.set(streamId, {
+        type: "readable",
+        stream: readable,
+        controller,
+        metadata,
+        chunks
+      });
+      this.emit("streamReceived", {
+        peerId: this.peerId,
+        streamId,
+        stream: readable,
+        metadata
+      });
+    }
+    _handleStreamChunkLegacy(message) {
+      const { streamId, chunkIndex, data } = message;
+      const streamData = this._activeStreams.get(streamId);
+      if (!streamData) {
+        this.debug.warn(`Received chunk for unknown stream ${streamId}`);
+        return;
+      }
+      const chunk = new Uint8Array(data);
+      if (streamData.controller) {
+        streamData.controller.enqueue(chunk);
+      }
+      if (Array.isArray(streamData.chunks)) {
+        streamData.chunks.push(chunk);
+      }
+      this.debug.log(`\u{1F4E5} Received chunk ${chunkIndex} for stream ${streamId} (${chunk.length} bytes)`);
+    }
+    _handleStreamChunkBinary(header, chunk) {
+      const { streamId, chunkIndex, size } = header;
+      const streamData = this._activeStreams.get(streamId);
+      if (!streamData) {
+        this.debug.warn(`Received binary chunk for unknown stream ${streamId}`);
+        return;
+      }
+      if (size && size !== chunk.byteLength) {
+        this.debug.warn(`Stream ${streamId} chunk ${chunkIndex} size mismatch: expected ${size}, got ${chunk.byteLength}`);
+      }
+      if (streamData.controller) {
+        streamData.controller.enqueue(chunk);
+      }
+      if (Array.isArray(streamData.chunks)) {
+        streamData.chunks.push(chunk);
+      }
+      this.debug.log(`\u{1F4E5} Received chunk ${chunkIndex} for stream ${streamId} (${chunk.byteLength} bytes)`);
+    }
+    _handleStreamEnd(message) {
+      const { streamId, totalChunks } = message;
+      const streamData = this._activeStreams.get(streamId);
+      if (!streamData) {
+        this.debug.warn(`Received end for unknown stream ${streamId}`);
+        return;
+      }
+      if (streamData.controller) {
+        streamData.controller.close();
+      }
+      this.debug.log(`\u{1F4E5} Stream ${streamId} completed (${totalChunks} chunks)`);
+      this._activeStreams.delete(streamId);
+      this._streamChunks.delete(streamId);
+      this._streamMetadata.delete(streamId);
+      this.emit("streamCompleted", {
+        peerId: this.peerId,
+        streamId,
+        totalChunks
+      });
+    }
+    _handleStreamAbort(message) {
+      const { streamId, reason } = message;
+      const streamData = this._activeStreams.get(streamId);
+      if (streamData && streamData.controller) {
+        streamData.controller.error(new Error(reason));
+      }
+      this.debug.log(`\u274C Stream ${streamId} aborted: ${reason}`);
+      this._activeStreams.delete(streamId);
+      this._streamChunks.delete(streamId);
+      this._streamMetadata.delete(streamId);
+      this.emit("streamAborted", {
+        peerId: this.peerId,
+        streamId,
+        reason
+      });
+    }
+    _generateStreamId() {
+      return `stream-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
     }
     /**
      * CRITICAL FIX: Manually check for new remote tracks after renegotiation
@@ -5786,6 +6236,18 @@ ${b64.match(/.{1,64}/g).join("\n")}
         this.emit("remoteStream", event);
         this.debug.log("\u{1F504} MEDIA FORWARDING: Disabled to prevent renegotiation conflicts with 3+ peers");
       });
+      peerConnection.addEventListener("streamReceived", (event) => {
+        this.debug.log(`[EVENT] Data stream received from ${event.peerId.substring(0, 8)}...`);
+        this.mesh.emit("streamReceived", event);
+      });
+      peerConnection.addEventListener("streamCompleted", (event) => {
+        this.debug.log(`[EVENT] Data stream completed from ${event.peerId.substring(0, 8)}...`);
+        this.mesh.emit("streamCompleted", event);
+      });
+      peerConnection.addEventListener("streamAborted", (event) => {
+        this.debug.log(`[EVENT] Data stream aborted from ${event.peerId.substring(0, 8)}...`);
+        this.mesh.emit("streamAborted", event);
+      });
       peerConnection.addEventListener("renegotiationNeeded", async (event) => {
         this.debug.log(`\u{1F504} Renegotiation needed for ${event.peerId.substring(0, 8)}...`);
         if (this.activeRenegotiations.size >= this.maxConcurrentRenegotiations) {
@@ -6143,6 +6605,16 @@ ${b64.match(/.{1,64}/g).join("\n")}
         this.debug.warn("Received invalid message from", fromPeerId?.substring(0, 8));
         return;
       }
+      if (message.type === "binary" && message.data instanceof Uint8Array) {
+        this.debug.log(`\u{1F4E6} Received binary message (${message.size} bytes) from ${fromPeerId.substring(0, 8)}...`);
+        this.mesh.emit("binaryMessageReceived", {
+          from: fromPeerId,
+          data: message.data,
+          size: message.size,
+          timestamp: Date.now()
+        });
+        return;
+      }
       const filteredMessageTypes = /* @__PURE__ */ new Set([
         "signaling-relay",
         "peer-announce-relay",
@@ -6362,13 +6834,18 @@ ${b64.match(/.{1,64}/g).join("\n")}
       for (const [peerId, peerConnection] of this.peers) {
         if (peerConnection.connection?.signalingState === "have-local-offer") {
           const connectionAge = Date.now() - peerConnection.connectionStartTime;
-          if (connectionAge > 2e3) {
+          if (connectionAge > 1e4) {
             stuckConnections.push(peerId);
           }
         }
       }
       if (stuckConnections.length > 0) {
         this.debug.log(`\u{1F6A8} STUCK MONITOR: Found ${stuckConnections.length} stuck connections - forcing recovery`);
+        if (typeof window !== "undefined" && window.location?.hostname === "localhost") {
+          console.warn("\u26A0\uFE0F LOCAL TESTING: WebRTC connections on localhost require media permissions!");
+          console.warn('   Go to the Media tab and click "Start Media" to grant permissions.');
+          console.warn("   See docs/LOCAL_TESTING.md for details.");
+        }
         for (const peerId of stuckConnections) {
           this.forceConnectionRecovery(peerId).catch((error) => {
             this.debug.error(`Failed to recover stuck connection for ${peerId}:`, error);
@@ -6785,9 +7262,15 @@ ${b64.match(/.{1,64}/g).join("\n")}
       }
       const peerConnection = this.connectionManager.getPeer(fromPeerId);
       this.debug.log(`\u{1F504} ANSWER RECEIVE DEBUG: Found peer connection: ${!!peerConnection}`);
+      const allPeerIds = Array.from(this.connectionManager.peers.keys());
+      this.debug.log(`\u{1F504} ANSWER RECEIVE DEBUG: All current peers (${allPeerIds.length}): ${allPeerIds.map((p) => p.substring(0, 8)).join(", ")}`);
       if (peerConnection) {
         this.debug.log(`\u{1F504} ANSWER RECEIVE DEBUG: Peer connection state: ${peerConnection.connection?.signalingState}`);
         this.debug.log(`\u{1F504} ANSWER RECEIVE DEBUG: Is initiator: ${peerConnection.isInitiator}`);
+        this.debug.log(`\u{1F504} ANSWER RECEIVE DEBUG: Connection age: ${Date.now() - peerConnection.connectionStartTime}ms`);
+      } else {
+        this.debug.error(`\u{1F504} ANSWER RECEIVE DEBUG: NO PEER CONNECTION - Was expecting peer ${fromPeerId.substring(0, 8)}...`);
+        this.debug.error(`\u{1F504} ANSWER RECEIVE DEBUG: This means the peer connection was cleaned up or never created!`);
       }
       if (peerConnection) {
         try {
@@ -6805,7 +7288,8 @@ ${b64.match(/.{1,64}/g).join("\n")}
           }
         }
       } else {
-        this.debug.log("\u274C ANSWER RECEIVE DEBUG: No peer connection found for answer from", fromPeerId);
+        this.debug.error("\u274C ANSWER RECEIVE DEBUG: No peer connection found for answer from", fromPeerId);
+        this.debug.error("\u274C ANSWER RECEIVE DEBUG: Peer connection may have been cleaned up prematurely - check connection timeout/cleanup logic");
       }
     }
     handleConnectionRejected(data, fromPeerId) {
@@ -7649,6 +8133,26 @@ ${b64.match(/.{1,64}/g).join("\n")}
         this.handlePeerAnnouncement(content, originPeerId);
       } else if (subtype === "mediaEvent") {
         this.handleMediaEvent(content, originPeerId);
+      } else if (subtype === "stream-chunk") {
+        this.emit("messageReceived", {
+          from: originPeerId,
+          message: {
+            type: "stream-chunk",
+            ...content
+          },
+          timestamp,
+          messageId
+        });
+      } else if (subtype === "stream-control") {
+        this.emit("messageReceived", {
+          from: originPeerId,
+          message: {
+            type: "stream-control",
+            ...content
+          },
+          timestamp,
+          messageId
+        });
       } else if (subtype === "dm") {
         if (typeof to === "string" && typeof this.mesh.peerId === "string" && to.trim().toLowerCase() === this.mesh.peerId.trim().toLowerCase()) {
           this.debug.log(`\u{1F50D} DM DEBUG: Received DM from ${originPeerId?.substring(0, 8)}, content type: ${typeof processedContent}`);
@@ -8088,7 +8592,12 @@ ${b64.match(/.{1,64}/g).join("\n")}
         if (!video && !audio) {
           throw new Error("At least one of video or audio must be enabled");
         }
-        this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
+        const pigeonRTC = environmentDetector.getPigeonRTC();
+        if (pigeonRTC) {
+          this.localStream = await pigeonRTC.getUserMedia(constraints);
+        } else {
+          this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
+        }
         this.isVideoEnabled = video;
         this.isAudioEnabled = audio;
         this.markStreamAsLocal(this.localStream);
@@ -8178,10 +8687,11 @@ ${b64.match(/.{1,64}/g).join("\n")}
        * Check if browser supports required APIs
        */
     static checkSupport() {
+      const pigeonRTC = environmentDetector.getPigeonRTC();
       const support = {
         getUserMedia: !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia),
         enumerateDevices: !!(navigator.mediaDevices && navigator.mediaDevices.enumerateDevices),
-        webRTC: !!window.RTCPeerConnection
+        webRTC: pigeonRTC ? pigeonRTC.isSupported() : !!window.RTCPeerConnection
       };
       support.fullSupport = support.getUserMedia && support.enumerateDevices && support.webRTC;
       return support;
@@ -10786,6 +11296,7 @@ ${b64.match(/.{1,64}/g).join("\n")}
       this.discoveredPeers = /* @__PURE__ */ new Map();
       this.ongoingKeyExchanges = /* @__PURE__ */ new Set();
       this.emittedPeerKeyEvents = /* @__PURE__ */ new Set();
+      this.gossipStreams = /* @__PURE__ */ new Map();
       this.storageManager = new StorageManager(this);
       this.mediaManager = new MediaManager();
       this.connectionManager = new ConnectionManager(this);
@@ -10826,6 +11337,14 @@ ${b64.match(/.{1,64}/g).join("\n")}
         }
         if (data.message && data.message.type === "dht" && this.webDHT) {
           this.webDHT.handleMessage(data.message, data.from);
+          return;
+        }
+        if (data.message && data.message.type === "stream-chunk") {
+          this._handleGossipStreamChunk(data.message, data.from);
+          return;
+        }
+        if (data.message && data.message.type === "stream-control") {
+          this._handleGossipStreamControl(data.message, data.from);
           return;
         }
         if (data.content && typeof data.content === "string") {
@@ -10964,14 +11483,34 @@ ${b64.match(/.{1,64}/g).join("\n")}
     }
     async init() {
       try {
-        if (this.runtimeInfo?.isNodeJS) {
+        try {
+          const webrtcInitialized = await environmentDetector.initWebRTCAsync();
+          if (webrtcInitialized) {
+            const adapterName = environmentDetector.getPigeonRTC()?.getAdapterName();
+            this.debug.log(`\u{1F310} PigeonRTC initialized successfully (${adapterName})`);
+          }
+        } catch (error) {
+          this.debug.warn("PigeonRTC initialization failed:", error.message);
+        }
+        if (environmentDetector.isBrowser) {
           try {
-            const webrtcInitialized = await environmentDetector.initWebRTCAsync();
-            if (webrtcInitialized) {
-              this.debug.log("\u{1F310} WebRTC polyfill initialized successfully for Node.js environment");
+            const isLocalhost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1" || window.location.hostname === "";
+            if (isLocalhost && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+              this.debug.log("\u{1F3A4} Requesting media permissions for localhost WebRTC...");
+              const stream = await navigator.mediaDevices.getUserMedia({
+                audio: true,
+                video: false
+              }).catch((err) => {
+                this.debug.warn("Media permission denied - connections may fail on localhost:", err.message);
+                return null;
+              });
+              if (stream) {
+                stream.getTracks().forEach((track) => track.stop());
+                this.debug.log("\u2705 Media permissions granted - localhost connections will work");
+              }
             }
           } catch (error) {
-            this.debug.warn("WebRTC polyfill initialization failed:", error.message);
+            this.debug.warn("Could not request media permissions:", error.message);
           }
         }
         if (this.providedPeerId) {
@@ -11042,7 +11581,6 @@ ${b64.match(/.{1,64}/g).join("\n")}
         this.connected = false;
         this.polling = false;
         this.peerDiscovery.stop();
-        this.connectionManager.disconnectAllPeers();
         this.emit("statusChanged", { type: "disconnected" });
       });
       this.signalingClient.addEventListener("signalingMessage", (message) => {
@@ -11329,6 +11867,251 @@ ${b64.match(/.{1,64}/g).join("\n")}
        */
     async sendMessage(content) {
       return await this.gossipManager.broadcastMessage(content, "chat");
+    }
+    /**
+     * Send binary data to a specific peer
+     * @param {string} targetPeerId - The destination peer's ID
+     * @param {Uint8Array|ArrayBuffer} binaryData - The binary data to send
+     * @returns {boolean} True if sent successfully
+     */
+    async sendBinaryData(targetPeerId, binaryData) {
+      if (!targetPeerId || typeof targetPeerId !== "string") {
+        this.debug.error("Invalid targetPeerId for binary message");
+        return false;
+      }
+      const peerConnection = this.connectionManager.peers.get(targetPeerId);
+      if (!peerConnection) {
+        this.debug.error(`No connection to peer ${targetPeerId.substring(0, 8)}...`);
+        return false;
+      }
+      return peerConnection.sendMessage(binaryData);
+    }
+    /**
+     * Broadcast binary data to all connected peers
+     * @param {Uint8Array|ArrayBuffer} binaryData - The binary data to broadcast
+     * @returns {number} Number of peers the data was sent to
+     */
+    async broadcastBinaryData(binaryData) {
+      const peers = this.getConnectedPeers();
+      let sentCount = 0;
+      for (const peer of peers) {
+        if (await this.sendBinaryData(peer.peerId, binaryData)) {
+          sentCount++;
+        }
+      }
+      this.debug.log(`\u{1F4E6} Binary data broadcasted to ${sentCount}/${peers.length} peers`);
+      return sentCount;
+    }
+    /**
+     * Create a writable stream to send data to a specific peer
+     * @param {string} targetPeerId - The destination peer's ID
+     * @param {object} options - Stream options (filename, mimeType, totalSize, etc.)
+     * @returns {WritableStream} A writable stream
+     */
+    createStreamToPeer(targetPeerId, options = {}) {
+      if (!targetPeerId || typeof targetPeerId !== "string") {
+        throw new Error("Invalid targetPeerId for stream");
+      }
+      const peerConnection = this.connectionManager.peers.get(targetPeerId);
+      if (!peerConnection) {
+        throw new Error(`No connection to peer ${targetPeerId.substring(0, 8)}...`);
+      }
+      return peerConnection.createWritableStream(options);
+    }
+    /**
+     * Send a ReadableStream to a peer
+     * @param {string} targetPeerId - The destination peer's ID
+     * @param {ReadableStream} readableStream - The stream to send
+     * @param {object} options - Stream options (filename, mimeType, etc.)
+     * @returns {Promise<void>}
+     */
+    async sendStream(targetPeerId, readableStream, options = {}) {
+      const writableStream = this.createStreamToPeer(targetPeerId, options);
+      try {
+        await readableStream.pipeTo(writableStream);
+        this.debug.log(`\u2705 Stream sent successfully to ${targetPeerId.substring(0, 8)}...`);
+      } catch (error) {
+        this.debug.error(`\u274C Failed to send stream to ${targetPeerId.substring(0, 8)}...:`, error);
+        throw error;
+      }
+    }
+    /**
+     * Send a File to a peer using streams
+     * @param {string} targetPeerId - The destination peer's ID
+     * @param {File} file - The file to send
+     * @returns {Promise<void>}
+     */
+    async sendFile(targetPeerId, file) {
+      this.debug.log(`\u{1F4C1} Sending file "${file.name}" (${file.size} bytes) to ${targetPeerId.substring(0, 8)}...`);
+      const options = {
+        filename: file.name,
+        mimeType: file.type,
+        totalSize: file.size,
+        type: "file"
+      };
+      const stream = file.stream();
+      await this.sendStream(targetPeerId, stream, options);
+    }
+    /**
+     * Send a Blob to a peer using streams
+     * @param {string} targetPeerId - The destination peer's ID
+     * @param {Blob} blob - The blob to send
+     * @param {object} options - Additional options
+     * @returns {Promise<void>}
+     */
+    async sendBlob(targetPeerId, blob, options = {}) {
+      this.debug.log(`\u{1F4E6} Sending blob (${blob.size} bytes) to ${targetPeerId.substring(0, 8)}...`);
+      const streamOptions = {
+        ...options,
+        mimeType: blob.type,
+        totalSize: blob.size,
+        type: "blob"
+      };
+      const stream = blob.stream();
+      await this.sendStream(targetPeerId, stream, streamOptions);
+    }
+    /**
+     * Create a writable stream that broadcasts data to all peers in the mesh using gossip
+     * @param {object} options - Stream options (filename, mimeType, totalSize, etc.)
+     * @returns {WritableStream} A writable stream that broadcasts via gossip protocol
+     */
+    createBroadcastStream(options = {}) {
+      const streamId = options.streamId || this._generateStreamId();
+      const metadata = {
+        streamId,
+        type: options.type || "broadcast",
+        filename: options.filename,
+        mimeType: options.mimeType,
+        totalSize: options.totalSize,
+        timestamp: Date.now(),
+        ...options
+      };
+      const chunks = [];
+      let chunkIndex = 0;
+      let totalBytesWritten = 0;
+      const self2 = this;
+      this.debug.log(`\u{1F4E1} Creating gossip broadcast stream: ${streamId}`);
+      return new WritableStream({
+        async write(chunk) {
+          const chunkData = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+          const chunkId = chunkIndex++;
+          chunks.push({
+            index: chunkId,
+            data: chunkData
+          });
+          totalBytesWritten += chunkData.length;
+          try {
+            await self2.gossipManager.broadcastMessage({
+              streamId,
+              chunkIndex: chunkId,
+              data: Array.from(chunkData),
+              // Convert to regular array for JSON
+              totalSize: metadata.totalSize,
+              metadata: chunkId === 0 ? metadata : void 0
+              // Include metadata with first chunk
+            }, "stream-chunk");
+            self2.debug.log(`\u{1F4E1} Gossiped chunk ${chunkId} (${chunkData.length} bytes) for stream ${streamId.substring(0, 8)}...`);
+          } catch (error) {
+            self2.debug.error(`Failed to gossip chunk ${chunkId}:`, error);
+            throw error;
+          }
+        },
+        async close() {
+          try {
+            await self2.gossipManager.broadcastMessage({
+              streamId,
+              action: "end",
+              totalChunks: chunkIndex,
+              totalBytes: totalBytesWritten,
+              metadata
+            }, "stream-control");
+            self2.debug.log(`\u{1F4E1} Broadcast stream completed via gossip: ${totalBytesWritten} bytes in ${chunkIndex} chunks`);
+            self2.emit("broadcastStreamComplete", {
+              streamId,
+              totalBytes: totalBytesWritten,
+              totalChunks: chunkIndex,
+              metadata
+            });
+          } catch (error) {
+            self2.debug.error("Failed to broadcast stream end:", error);
+            throw error;
+          }
+        },
+        async abort(reason) {
+          try {
+            await self2.gossipManager.broadcastMessage({
+              streamId,
+              action: "abort",
+              reason: reason?.message || String(reason),
+              metadata
+            }, "stream-control");
+            self2.debug.log(`\u274C Broadcast stream aborted via gossip: ${reason}`);
+            self2.emit("broadcastStreamAborted", {
+              streamId,
+              reason: reason?.message || String(reason),
+              metadata
+            });
+          } catch (error) {
+            self2.debug.error("Failed to broadcast stream abort:", error);
+          }
+        }
+      });
+    }
+    /**
+     * Broadcast a ReadableStream to all connected peers
+     * @param {ReadableStream} readableStream - The stream to broadcast
+     * @param {object} options - Stream options (filename, mimeType, etc.)
+     * @returns {Promise<void>}
+     */
+    async broadcastStream(readableStream, options = {}) {
+      const writableStream = this.createBroadcastStream(options);
+      try {
+        await readableStream.pipeTo(writableStream);
+        this.debug.log(`\u2705 Stream broadcasted successfully to all peers`);
+      } catch (error) {
+        this.debug.error(`\u274C Failed to broadcast stream:`, error);
+        throw error;
+      }
+    }
+    /**
+     * Broadcast a File to all connected peers using streams
+     * @param {File} file - The file to broadcast
+     * @returns {Promise<void>}
+     */
+    async broadcastFile(file) {
+      this.debug.log(`\u{1F4C1} Broadcasting file "${file.name}" (${file.size} bytes) to all peers`);
+      const options = {
+        filename: file.name,
+        mimeType: file.type,
+        totalSize: file.size,
+        type: "file"
+      };
+      const stream = file.stream();
+      await this.broadcastStream(stream, options);
+    }
+    /**
+     * Broadcast a Blob to all connected peers using streams
+     * @param {Blob} blob - The blob to broadcast
+     * @param {object} options - Additional options
+     * @returns {Promise<void>}
+     */
+    async broadcastBlob(blob, options = {}) {
+      this.debug.log(`\u{1F4E6} Broadcasting blob (${blob.size} bytes) to all peers`);
+      const streamOptions = {
+        ...options,
+        mimeType: blob.type,
+        totalSize: blob.size,
+        type: "blob"
+      };
+      const stream = blob.stream();
+      await this.broadcastStream(stream, streamOptions);
+    }
+    /**
+     * Generate a unique stream ID
+     * @private
+     */
+    _generateStreamId() {
+      return `stream_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
     }
     // Helper methods for backward compatibility
     canAcceptMorePeers() {
@@ -11989,6 +12772,118 @@ ${b64.match(/.{1,64}/g).join("\n")}
       this.signalingHandler.handleSignalingMessage(reconstitutedMessage);
     }
     /**
+     * Handle incoming gossip stream chunk
+     * @param {Object} message - The stream chunk message
+     * @param {string} from - Sender peer ID
+     * @private
+     */
+    _handleGossipStreamChunk(message, from) {
+      const { streamId, chunkIndex, data, metadata } = message;
+      if (!streamId || chunkIndex === void 0 || !data) {
+        this.debug.error("Invalid gossip stream chunk format");
+        return;
+      }
+      this.debug.log(`\u{1F4E5} Received gossip stream chunk ${chunkIndex} for ${streamId.substring(0, 8)}... from ${from.substring(0, 8)}...`);
+      if (!this.gossipStreams.has(streamId)) {
+        const chunks = /* @__PURE__ */ new Map();
+        let controller;
+        const readable = new ReadableStream({
+          start(ctrl) {
+            controller = ctrl;
+          },
+          cancel: (reason) => {
+            this.debug.log(`\u{1F4E5} Gossip stream ${streamId.substring(0, 8)}... cancelled: ${reason}`);
+          }
+        });
+        this.gossipStreams.set(streamId, {
+          chunks,
+          metadata: metadata || {},
+          controller,
+          stream: readable,
+          from,
+          totalChunks: null
+        });
+        this.emit("streamReceived", {
+          peerId: from,
+          streamId,
+          stream: readable,
+          metadata: metadata || {}
+        });
+      }
+      const streamData = this.gossipStreams.get(streamId);
+      streamData.chunks.set(chunkIndex, new Uint8Array(data));
+      this._enqueueOrderedChunks(streamId);
+    }
+    /**
+     * Handle incoming gossip stream control message
+     * @param {Object} message - The stream control message
+     * @param {string} from - Sender peer ID
+     * @private
+     */
+    _handleGossipStreamControl(message, from) {
+      const { streamId, action, totalChunks, totalBytes, metadata, reason } = message;
+      if (!streamId || !action) {
+        this.debug.error("Invalid gossip stream control format");
+        return;
+      }
+      const streamData = this.gossipStreams.get(streamId);
+      if (!streamData) {
+        this.debug.warn(`Received control message for unknown stream: ${streamId.substring(0, 8)}...`);
+        return;
+      }
+      if (action === "end") {
+        this.debug.log(`\u{1F4E5} Gossip stream ${streamId.substring(0, 8)}... ended: ${totalBytes} bytes in ${totalChunks} chunks`);
+        streamData.totalChunks = totalChunks;
+        this._enqueueOrderedChunks(streamId);
+        if (streamData.controller) {
+          streamData.controller.close();
+        }
+        this.emit("streamCompleted", {
+          peerId: from,
+          streamId,
+          totalChunks,
+          totalBytes
+        });
+        setTimeout(() => {
+          this.gossipStreams.delete(streamId);
+        }, 5e3);
+      } else if (action === "abort") {
+        this.debug.log(`\u274C Gossip stream ${streamId.substring(0, 8)}... aborted: ${reason}`);
+        if (streamData.controller) {
+          streamData.controller.error(new Error(reason || "Stream aborted"));
+        }
+        this.emit("streamAborted", {
+          peerId: from,
+          streamId,
+          reason
+        });
+        this.gossipStreams.delete(streamId);
+      }
+    }
+    /**
+     * Enqueue ordered chunks to the readable stream
+     * @param {string} streamId - The stream ID
+     * @private
+     */
+    _enqueueOrderedChunks(streamId) {
+      const streamData = this.gossipStreams.get(streamId);
+      if (!streamData || !streamData.controller) return;
+      const { chunks, controller } = streamData;
+      let nextIndex = streamData.nextIndex || 0;
+      while (chunks.has(nextIndex)) {
+        const chunk = chunks.get(nextIndex);
+        try {
+          controller.enqueue(chunk);
+          chunks.delete(nextIndex);
+          nextIndex++;
+        } catch (error) {
+          this.debug.error(`Failed to enqueue chunk ${nextIndex}:`, error);
+          break;
+        }
+      }
+      streamData.nextIndex = nextIndex;
+    }
+    /**
      * Send a signaling message, using mesh connections for renegotiation
      * @param {Object} message - The signaling message
      * @param {string} targetPeerId - Target peer ID (optional)
@@ -12274,11 +13169,26 @@ ${b64.match(/.{1,64}/g).join("\n")}
   // src/browser-entry.js
   if (typeof globalThis !== "undefined") {
     globalThis.__PEERPIGEON_UNSEA__ = unsea_exports;
+    globalThis.__PEERPIGEON_PIGEONRTC__ = {
+      createPigeonRTC,
+      PigeonRTC,
+      BrowserRTCAdapter,
+      RTCAdapter,
+      default: createPigeonRTC
+    };
   }
   if (typeof window !== "undefined") {
     window.__PEERPIGEON_UNSEA__ = unsea_exports;
+    window.__PEERPIGEON_PIGEONRTC__ = {
+      createPigeonRTC,
+      PigeonRTC,
+      BrowserRTCAdapter,
+      RTCAdapter,
+      default: createPigeonRTC
+    };
+    window.PeerPigeonMesh = PeerPigeonMesh;
   }
-  console.log("\u{1F510} PeerPigeon browser bundle loaded with embedded UnSEA crypto");
+  console.log("\u{1F510} PeerPigeon browser bundle loaded with embedded UnSEA crypto and PigeonRTC");
   return __toCommonJS(browser_entry_exports);
 })();
 /*! Bundled license information:
