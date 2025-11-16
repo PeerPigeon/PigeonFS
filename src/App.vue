@@ -921,7 +921,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
+import { ref, onMounted, onUnmounted, watch, computed, nextTick } from 'vue'
 import { usePeerPigeon } from './composables/usePeerPigeon'
 import { usePagingStorage } from './composables/usePagingStorage'
 
@@ -1051,6 +1051,37 @@ const AVAILABLE_DATASETS = {
 
 // Generic dataset state (replaces Bible-specific state)
 const datasets = ref({}) // { datasetId: { loaded, loading, book, index, itemCount, indexSize, loadedFromCache, ... } }
+
+// --- DYNAMIC FILE-INDEX ANNOUNCEMENT ---
+// Watch for file-index dataset changes and announce to peers
+watch(
+  () => datasets.value['file-index'] ? [datasets.value['file-index'].itemCount, datasets.value['file-index'].indexSize] : [0,0],
+  async ([newCount, newIndexSize], [oldCount, oldIndexSize]) => {
+    if (
+      pigeon.value && pigeon.value.gossipManager &&
+      datasets.value['file-index'] &&
+      datasets.value['file-index'].loaded &&
+      (newCount !== oldCount || newIndexSize !== oldIndexSize)
+    ) {
+      // Announce file-index availability to peers
+      const availMessage = {
+        type: 'dataset-available',
+        datasetId: 'file-index',
+        datasetName: 'File Index',
+        items: datasets.value['file-index'].itemCount,
+        indexSize: datasets.value['file-index'].indexSize
+      }
+      await nextTick() // Ensure reactivity flush
+      try {
+        await pigeon.value.gossipManager.broadcastMessage(JSON.stringify(availMessage), 'chat')
+        console.log('🗂️ Broadcasted file-index availability to network')
+      } catch (e) {
+        console.warn('Failed to broadcast file-index availability:', e)
+      }
+    }
+  },
+  { immediate: true, deep: true }
+)
 const dataStorageMode = ref('indexeddb') // 'memory' or 'indexeddb'
 const dataStorageQuota = ref(500) // MB - increased default for large datasets like Bible
 const dataStorageUsed = ref(0) // MB
