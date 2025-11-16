@@ -18,7 +18,9 @@ export class PeerSynchronization {
       PAGE_DELETE: 'page_delete',
       PAGE_LIST: 'page_list',
       PEER_DISCOVERY: 'peer_discovery',
-      SYNC_REQUEST: 'sync_request'
+      SYNC_REQUEST: 'sync_request',
+      CHUNK_REQUEST: 'chunk_request',
+      CHUNK_RESPONSE: 'chunk_response'
     }
     
     this.startSyncProcess()
@@ -114,6 +116,12 @@ export class PeerSynchronization {
           break
         case this.MESSAGE_TYPES.SYNC_REQUEST:
           this.handleSyncRequest(data, fromPeerId)
+          break
+        case this.MESSAGE_TYPES.CHUNK_REQUEST:
+          this.handleChunkRequest(data, fromPeerId)
+          break
+        case this.MESSAGE_TYPES.CHUNK_RESPONSE:
+          this.handleChunkResponse(data, fromPeerId)
           break
       }
     } catch (error) {
@@ -470,6 +478,62 @@ export class PeerSynchronization {
   
   generateRequestId() {
     return `req_${this.storage.peerId}_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`
+  }
+  
+  // ===== CHUNK SYNCHRONIZATION =====
+  
+  async requestChunkFromPeer(peerId, chunkId, timeout = this.requestTimeout) {
+    const requestId = this.generateRequestId()
+    const message = {
+      type: this.MESSAGE_TYPES.CHUNK_REQUEST,
+      requestId,
+      chunkId,
+      fromPeer: this.storage.peerId,
+      timestamp: Date.now()
+    }
+    
+    try {
+      const response = await this.sendMessageToPeer(peerId, message, timeout)
+      return response.chunk
+    } catch (error) {
+      console.error(`Failed to get chunk ${chunkId} from peer ${peerId}:`, error)
+      return null
+    }
+  }
+  
+  async handleChunkRequest(data, fromPeerId) {
+    const { requestId, chunkId } = data
+    
+    // Look for the chunk in local storage
+    const chunk = this.storage.chunks.chunks.get(chunkId)
+    const metadata = this.storage.chunks.chunkMetadata.get(chunkId)
+    
+    const response = {
+      type: this.MESSAGE_TYPES.CHUNK_RESPONSE,
+      requestId,
+      chunkId,
+      found: !!chunk,
+      chunk: chunk ? Array.from(chunk) : null,
+      metadata: metadata || null,
+      fromPeer: this.storage.peerId,
+      timestamp: Date.now()
+    }
+    
+    this.storage.pigeon.sendTo(fromPeerId, JSON.stringify(response))
+  }
+  
+  handleChunkResponse(data, fromPeerId) {
+    const { requestId, chunk } = data
+    const pendingRequest = this.storage.pendingRequests.get(requestId)
+    
+    if (pendingRequest) {
+      clearTimeout(pendingRequest.timeoutId)
+      this.storage.pendingRequests.delete(requestId)
+      
+      // Convert array back to Uint8Array
+      const chunkData = chunk ? new Uint8Array(chunk) : null
+      pendingRequest.resolve({ ...data, chunk: chunkData })
+    }
   }
   
   onPeerConnected(peerId) {

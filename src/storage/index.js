@@ -13,10 +13,10 @@
  */
 
 // Core storage classes
-export { PagingStorage } from './storage/PagingStorage.js'
-export { PeerSynchronization } from './storage/PeerSynchronization.js'
-export { DistributedHashTable } from './storage/DistributedHashTable.js'
-export { StoragePersistence } from './storage/StoragePersistence.js'
+export { PagingStorage } from './PagingStorage.js'
+export { PeerSynchronization } from './PeerSynchronization.js'
+export { StoragePersistence } from './StoragePersistence.js'
+export { ChunkStorage } from './ChunkStorage.js'
 
 // Vue composables
 export { usePagingStorage } from './composables/usePagingStorage.js'

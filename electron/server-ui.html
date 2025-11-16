@@ -407,6 +407,29 @@
         let selectedFile = null;
         let serverRunning = false;
         
+        // On load, query current server status so UI isn't stuck at "Stopped" after startup
+        document.addEventListener('DOMContentLoaded', async () => {
+            try {
+                const status = await window.electronAPI.getServerStatus();
+                serverRunning = !!status.running;
+                if (serverRunning && status.port) {
+                    document.getElementById('serverPort').textContent = status.port;
+                    // Try to show existing files list if running
+                    refreshFiles();
+                }
+                updateUI();
+                
+                // Auto-start server on app load if it's not already running
+                if (!serverRunning) {
+                    addLog('Auto-start: starting server...', 'info');
+                    // Read current form values (populated from savedConfig earlier if present)
+                    await startServer();
+                }
+            } catch (e) {
+                // ignore
+            }
+        });
+        
         // Load saved configuration
         const savedConfig = localStorage.getItem('pigeonfs_server_config');
         if (savedConfig) {

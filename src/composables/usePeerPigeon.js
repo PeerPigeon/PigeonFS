@@ -26,7 +26,7 @@ export function usePeerPigeon() {
       
       pigeon.value = markRaw(new PeerPigeonMesh({
         networkName: options.networkName || 'pigeonfs',  // Use provided networkName or default
-        enableWebDHT: false,
+        enableWebDHT: true,
         enableCrypto: options.enableCrypto || false,
         enableDistributedStorage: false,
         maxPeers: 10,

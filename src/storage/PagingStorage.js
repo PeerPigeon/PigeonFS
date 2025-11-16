@@ -1,11 +1,12 @@
-/**
+87/**
  * PagingStorage - A distributed paging storage system for PeerPigeon networks
  * Based on the Book.js architecture with peer-to-peer capabilities
  */
 
 import { PeerSynchronization } from './PeerSynchronization.js'
-import { DistributedHashTable } from './DistributedHashTable.js'
+import { WebDHTAdapter } from './WebDHTAdapter.js'
 import { StoragePersistence } from './StoragePersistence.js'
+import { ChunkStorage } from './ChunkStorage.js'
 
 export class PagingStorage {
   constructor(options = {}) {
@@ -36,8 +37,14 @@ export class PagingStorage {
     
     // Initialize peer synchronization, DHT, and persistence
     this.sync = new PeerSynchronization(this)
-    this.dht = new DistributedHashTable(this)
+    // Require PeerPigeon's WebDHT (no internal fallback)
+    if (!this.pigeon || !this.pigeon.webDHT) {
+      throw new Error('WebDHT is required but not available on the PeerPigeon mesh')
+    }
+    this.dht = new WebDHTAdapter(this)
+  // console.log('Using WebDHT for distributed storage')
     this.persistence = new StoragePersistence(this, options.persistence)
+    this.chunks = new ChunkStorage(this, options.chunks)
   }
   
   setupEventHandlers() {
@@ -247,7 +254,7 @@ export class PagingStorage {
     page.lastModified = Date.now()
     newPage.lastModified = Date.now()
     
-    console.log(`Split page ${page.id} -> created ${newPage.id}`)
+  // console.log(`Split page ${page.id} -> created ${newPage.id}`)
     
     // Notify peers about the new page
     this.sync.broadcastPageCreation(newPage)
@@ -297,7 +304,7 @@ export class PagingStorage {
     // Delete source page
     this.deletePage(sourcePage.id)
     
-    console.log(`Merged page ${sourcePage.id} into ${targetPage.id}`)
+  // console.log(`Merged page ${sourcePage.id} into ${targetPage.id}`)
     this.sync.broadcastPageDeletion(sourcePage.id)
   }
   
@@ -344,7 +351,7 @@ export class PagingStorage {
   // ===== PEER MANAGEMENT =====
   
   onPeerDisconnected(peerId) {
-    console.log(`Peer disconnected: ${peerId}`)
+  // console.log(`Peer disconnected: ${peerId}`)
     this.peers.delete(peerId)
     
     // Remove peer from page locations
@@ -358,6 +365,33 @@ export class PagingStorage {
   getStats() {
     const cacheStats = this.persistence.getCacheStats()
     const dhtStats = this.dht.getLoadBalanceStats()
+    const chunkStats = this.chunks.getStats()
+    // Enhanced WebDHT stats when available
+    let webDHT = this.pigeon?.webDHT
+    let webDHTStats = null
+    try {
+      webDHTStats = webDHT && typeof webDHT.getStats === 'function' ? webDHT.getStats() : null
+    } catch {
+      webDHTStats = null
+    }
+    const derivedDht = {
+      peers: dhtStats.size,
+      isLoadBalanced: this.dht.isLoadBalanced(),
+      memoryPressure: this.persistence.getMemoryPressure(),
+      diskPressure: this.persistence.getDiskPressure()
+    }
+    // Map some common fields if present
+    if (webDHTStats && typeof webDHTStats === 'object') {
+      derivedDht.peerCount = webDHTStats.peerCount ?? webDHTStats.peers ?? undefined
+      derivedDht.localKeys = webDHTStats.localKeys ?? undefined
+      derivedDht.totalKeys = webDHTStats.totalKeys ?? undefined
+      derivedDht.closestPeers = webDHTStats.closestPeers ?? undefined
+      derivedDht.routingTableSize = webDHTStats.routingTableSize ?? webDHTStats.buckets?.length ?? undefined
+      derivedDht.bucketCounts = webDHTStats.buckets?.map?.(b => b.size ?? b.count).filter(v => v != null) ?? undefined
+      derivedDht.storageUsed = webDHTStats.storageUsed ?? undefined
+      derivedDht.storageQuota = webDHTStats.storageQuota ?? undefined
+      derivedDht.latencyMs = webDHTStats.avgLatencyMs ?? webDHTStats.latencyMs ?? undefined
+    }
     
     return {
       peerId: this.peerId,
@@ -367,12 +401,8 @@ export class PagingStorage {
       connectedPeers: this.peers.size,
       averagePageSize: Array.from(this.pages.values()).reduce((sum, page) => sum + page.size, 0) / this.pages.size || 0,
       cache: cacheStats,
-      dht: {
-        peers: dhtStats.size,
-        isLoadBalanced: this.dht.isLoadBalanced(),
-        memoryPressure: this.persistence.getMemoryPressure(),
-        diskPressure: this.persistence.getDiskPressure()
-      }
+      chunks: chunkStats,
+      dht: derivedDht
     }
   }
   
@@ -386,10 +416,57 @@ export class PagingStorage {
     }))
   }
   
+  // ===== FILE AND CHUNK OPERATIONS =====
+  
+  /**
+   * Store a file with automatic chunking based on peer type
+   */
+  async storeFile(filename, data, metadata = {}) {
+    return await this.chunks.storeFile(filename, data, metadata)
+  }
+  
+  /**
+   * Retrieve a file by filename or hash
+   */
+  async getFile(filenameOrHash) {
+    return await this.chunks.getFile(filenameOrHash)
+  }
+  
+  /**
+   * Store a single chunk
+   */
+  async storeChunk(chunkId, chunkData, metadata = {}) {
+    return await this.chunks.storeChunk(chunkId, chunkData, metadata)
+  }
+  
+  /**
+   * Get a single chunk
+   */
+  async getChunk(chunkId) {
+    return await this.chunks.getChunk(chunkId)
+  }
+  
+  /**
+   * List all stored files
+   */
+  async listFiles() {
+    return await this.chunks.listFiles()
+  }
+  
+  /**
+   * Find file by filename
+   */
+  async findFileByFilename(filename) {
+    return await this.chunks.findFileByFilename(filename)
+  }
+  
   // ===== LIFECYCLE MANAGEMENT =====
   
   async shutdown() {
-    console.log('Shutting down PagingStorage...')
+  // console.log('Shutting down PagingStorage...')
+    
+    // Shutdown chunk storage
+    await this.chunks.shutdown()
     
     // Shutdown persistence layer
     await this.persistence.shutdown()
@@ -397,9 +474,9 @@ export class PagingStorage {
     // Disconnect from peers
     if (this.pigeon) {
       // Note: We don't disconnect the pigeon instance as it may be used elsewhere
-      console.log('PeerPigeon connection maintained')
+  // console.log('PeerPigeon connection maintained')
     }
     
-    console.log('PagingStorage shutdown complete')
+  // console.log('PagingStorage shutdown complete')
   }
 }

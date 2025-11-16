@@ -461,22 +461,30 @@
           <!-- Pre-configured Datasets -->
           <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-bottom: 16px;">
             <div 
-              v-for="config in AVAILABLE_DATASETS" 
+              v-for="config in allDatasets" 
               :key="config.id"
               style="border: 2px solid #e5e7eb; border-radius: 8px; padding: 12px; cursor: pointer; transition: all 0.2s;"
               :style="{ 
                 borderColor: datasets[config.id]?.loaded ? '#10b981' : '#e5e7eb',
                 background: datasets[config.id]?.loaded ? '#f0fdf4' : '#fff',
-                opacity: datasets[config.id]?.loading ? 0.6 : 1
+                opacity: (datasets[config.id]?.loading || config.remote) ? 0.9 : 1
               }"
-              @click="!datasets[config.id]?.loaded && !datasets[config.id]?.loading && loadDatasetById(config.id)"
+              @click="config.remote ? selectDataset(config.id) : (!datasets[config.id]?.loaded && !datasets[config.id]?.loading && loadDatasetById(config.id))"
             >
               <div style="font-size: 2rem; margin-bottom: 8px;">{{ config.icon }}</div>
               <div style="font-weight: 600; font-size: 0.9rem; margin-bottom: 4px;">{{ config.name }}</div>
               <div style="font-size: 0.75rem; color: #666;">
-                <span v-if="datasets[config.id]?.loaded">✅ Loaded</span>
-                <span v-else-if="datasets[config.id]?.loading">⏳ Loading...</span>
-                <span v-else>Click to load</span>
+                <template v-if="config.remote">
+                  🌐 Remote (search via peers)
+                  <span v-if="peerDatasets[config.id]" style="display:block; font-size:0.7rem; color:#999;">
+                    peers: {{ peerDatasets[config.id].peerIds?.size || 1 }}, items: {{ (peerDatasets[config.id].itemCount || 0).toLocaleString() }}
+                  </span>
+                </template>
+                <template v-else>
+                  <span v-if="datasets[config.id]?.loaded">✅ Loaded</span>
+                  <span v-else-if="datasets[config.id]?.loading">⏳ Loading...</span>
+                  <span v-else>Click to load</span>
+                </template>
               </div>
               <div v-if="datasets[config.id]?.loaded" style="font-size: 0.7rem; color: #10b981; margin-top: 4px;">
                 {{ datasets[config.id].itemCount.toLocaleString() }} items
@@ -517,6 +525,13 @@
 
         <!-- Search Interface (always visible) -->
         <div>
+          <!-- Dataset selector -->
+          <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+            <label style="font-size:0.85rem; color:#555;">Dataset:</label>
+            <select v-model="searchDataset" style="padding:6px 8px; border:1px solid #ddd; border-radius:4px;">
+              <option v-for="cfg in allDatasets" :key="cfg.id" :value="cfg.id">{{ cfg.icon }} {{ cfg.name }}</option>
+            </select>
+          </div>
           <div style="display: flex; gap: 8px; margin-bottom: 12px;">
             <input 
               ref="searchInput"
@@ -552,6 +567,12 @@
               Found <strong>{{ searchResults.length }}</strong> results from peers
               <span v-if="networkLatency"> in <strong>{{ networkLatency }}ms</strong> network latency</span>
             </span>
+            <div v-if="fileResultStats.count > 0" style="margin-top: 6px; color: #666; font-size: 0.85rem;">
+              Files: <strong>{{ fileResultStats.count }}</strong>
+              • Total: <strong>{{ formatFileSize(fileResultStats.total) }}</strong>
+              • Avg: <strong>{{ formatFileSize(fileResultStats.avg) }}</strong>
+              <span v-if="fileResultStats.topType">• Top type: <strong>{{ fileResultStats.topType }}</strong></span>
+            </div>
           </div>
 
           <!-- Search Results -->
@@ -561,12 +582,40 @@
               :key="idx"
               style="background: #f8f9fa; padding: 12px; margin-bottom: 8px; border-radius: 8px; border-left: 3px solid #667eea;"
             >
-              <div style="font-weight: 600; color: #667eea; margin-bottom: 4px;">
-                {{ result.key }}
+              <div style="display: flex; justify-content: space-between; align-items: start;">
+                <div style="flex: 1;">
+                  <div style="font-weight: 600; color: #667eea; margin-bottom: 4px; word-break: break-word; overflow-wrap: anywhere;">
+                    <template v-if="isFileResult(result)">{{ getFileName(result) }}</template>
+                    <template v-else>{{ result.key }}</template>
+                  </div>
+                  <div v-if="!isFileResult(result)" style="color: #495057; line-height: 1.5; word-break: break-word; overflow-wrap: anywhere;" v-html="highlightSearch(result.value)"></div>
+                  <div v-else style="font-size: 0.85rem; color: #666;">
+                    {{ formatFileSize(getFileSize(result)) }} • {{ getFileType(result) }}
+                  </div>
+                  <div v-if="result.source" style="font-size: 0.8rem; color: #999; margin-top: 4px;">
+                    Source: {{ result.source }}
+                  </div>
+                </div>
+                <!-- Download button for file results -->
+                <button 
+                  v-if="isFileResult(result)"
+                  @click="downloadDatasetFile(result)"
+                  :disabled="downloadingFiles[getFileId(result)]"
+                  style="padding: 6px 12px; font-size: 0.85rem; margin-left: 12px; white-space: nowrap;"
+                >
+                  {{ downloadingFiles[getFileId(result)] ? '⏳ Downloading...' : '⬇ Download' }}
+                </button>
               </div>
-              <div style="color: #495057; line-height: 1.5;" v-html="highlightSearch(result.value)"></div>
-              <div v-if="result.source" style="font-size: 0.8rem; color: #999; margin-top: 4px;">
-                Source: {{ result.source }}
+              <div v-if="downloadingFiles[getFileId(result)]" style="margin-top: 8px;">
+                <div style="background: #e9ecef; border-radius: 4px; height: 20px; overflow: hidden;">
+                  <div 
+                    style="background: #667eea; height: 100%; transition: width 0.3s;"
+                    :style="{ width: downloadingFiles[getFileId(result)].progress + '%' }"
+                  ></div>
+                </div>
+                <div style="font-size: 0.75rem; color: #666; margin-top: 4px;">
+                  {{ downloadingFiles[getFileId(result)].progress.toFixed(1) }}%
+                </div>
               </div>
             </div>
             <div v-if="searchResults.length > 20" style="text-align: center; padding: 12px; color: #666;">
@@ -609,9 +658,15 @@
 
         <!-- Search Results -->
         <div v-if="p2pFileSearchResults.length > 0" style="margin-top: 16px;">
-          <h4 style="font-size: 0.9rem; margin-bottom: 12px; color: #495057;">
+          <h4 style="font-size: 0.9rem; margin-bottom: 8px; color: #495057;">
             Found {{ p2pFileSearchResults.length }} files on {{ uniqueFilePeers }} peer(s)
           </h4>
+          <div v-if="p2pFileStats.count > 0" style="margin-bottom: 12px; color: #666; font-size: 0.85rem;">
+            Files: <strong>{{ p2pFileStats.count }}</strong>
+            • Total: <strong>{{ formatFileSize(p2pFileStats.total) }}</strong>
+            • Avg: <strong>{{ formatFileSize(p2pFileStats.avg) }}</strong>
+            <span v-if="p2pFileStats.topType">• Top type: <strong>{{ p2pFileStats.topType }}</strong></span>
+          </div>
           <div
             v-for="(file, idx) in p2pFileSearchResults.slice(0, 20)"
             :key="idx"
@@ -664,6 +719,48 @@
         <div v-else-if="p2pFileSearchQuery && !searchingNetworkFiles" style="text-align: center; padding: 40px; color: #999;">
           No files found on the network for "{{ p2pFileSearchQuery }}"
         </div>
+      </div>
+
+      <!-- Network Filename Search (DHT Book Index) -->
+      <div class="card">
+        <h2>🔎 Network Filename Index (DHT)</h2>
+        <p style="margin-bottom: 12px; color: #666; font-size: 0.9rem;">
+          Search filenames using the DHT-backed Book dataset (no server required)
+        </p>
+        <div style="display: flex; gap: 8px; margin-bottom: 12px; align-items: center;">
+          <input
+            v-model="dhtFilenameQuery"
+            @keyup.enter="searchDHTFilenameIndex"
+            type="text"
+            placeholder="e.g., presentation.pdf or pigeon logo"
+            style="flex: 1; padding: 8px; border: 1px solid #ddd; border-radius: 4px;"
+          />
+          <button 
+            class="send-button"
+            style="width: auto; padding: 8px 16px;"
+            :disabled="!dhtFilenameQuery || dhtFilenameSearching"
+            @click="searchDHTFilenameIndex"
+          >Search</button>
+        </div>
+        <div v-if="dhtFilenameError" style="color: #dc3545; margin-bottom: 8px; font-size: 0.85rem;">❌ {{ dhtFilenameError }}</div>
+        <div v-if="dhtFilenameSearching" style="color: #666; font-size: 0.9rem;">⏳ Searching DHT index...</div>
+        <div v-else-if="dhtFilenameResults.length > 0" style="margin-top: 8px;">
+          <div 
+            v-for="(f, idx) in dhtFilenameResults"
+            :key="idx"
+            style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 8px;"
+          >
+            <div style="flex: 1;">
+              <div style="font-weight: 600;">{{ f.name }}</div>
+              <div style="font-size: 0.8rem; color: #666;">
+                {{ formatFileSize(f.size || 0) }} • {{ f.type || 'unknown' }}
+                <span v-if="f.providers !== undefined" style="margin-left: 8px; color: #4b5563;">• Providers: {{ f.providers }}</span>
+              </div>
+            </div>
+            <div style="font-size: 0.8rem; color: #666; background: #eef2ff; padding: 4px 8px; border-radius: 4px;">Score: {{ Math.round((f.score || 0) * 100) }}%</div>
+          </div>
+        </div>
+        <div v-else style="color: #999; font-size: 0.9rem;">No matches yet. Try a different filename or keyword.</div>
       </div>
 
       <!-- PagingStorage Section -->
@@ -789,6 +886,16 @@
               <strong>Cache:</strong> 
               {{ storageStats.cache.memoryPages }}/{{ storageStats.cache.maxMemoryPages }} memory pages,
               {{ storageStats.cache.dirtyPages }} dirty
+            </div>
+            <div v-if="storageStats.chunks" style="margin-top: 8px;">
+              <strong>Chunks:</strong>
+              <div>Mode: {{ storageStats.chunks.mode }}</div>
+              <div>Storage Used: {{ formatFileSize(storageStats.chunks.storageUsed) }} / {{ formatFileSize(storageStats.chunks.quota) }} ({{ storageStats.chunks.usagePercent }}%)</div>
+              <div v-if="availableForChunks !== null">Available for chunks (10% rule): {{ formatFileSize(availableForChunks) }}</div>
+              <div>Total Chunks: {{ storageStats.chunks.totalChunks }}</div>
+              <div>Total Files: {{ storageStats.chunks.totalFiles }}</div>
+              <div v-if="storageStats.chunks.mode === 'browser'">Responsible Chunks: {{ storageStats.chunks.responsibleChunks }}</div>
+              <div v-if="storageStats.chunks.mode !== 'browser'">Whole Files Stored: {{ storageStats.chunks.wholeFiles }}</div>
             </div>
           </div>
         </details>
@@ -969,6 +1076,28 @@ const datasetIndexSize = computed(() => currentDataset.value?.indexSize || 0)
 const datasetStorageUsed = computed(() => currentDataset.value?.storageUsed || 0)
 const datasetCachedItemCount = computed(() => currentDataset.value?.cachedItemCount || 0)
 
+// Track peer-advertised datasets (dynamic discovery)
+const peerDatasets = ref({}) // { id: { name, icon, remote: true, itemCount, indexSize, lastSeen, peerIds:Set } }
+
+// Reactive list of all datasets (built-in + discovered)
+const allDatasets = computed(() => {
+  const base = { ...AVAILABLE_DATASETS }
+  const pd = peerDatasets.value || {}
+  for (const id of Object.keys(pd)) {
+    if (!base[id]) {
+      base[id] = {
+        id,
+        name: id,
+        icon: pd[id].icon || '🗃️',
+        url: null,
+        remote: true,
+        loader: (raw) => raw
+      }
+    }
+  }
+  return Object.values(base)
+})
+
 // JSON upload state
 const jsonFileInput = ref(null)
 const exampleJsonFormat = `[
@@ -985,6 +1114,11 @@ const storageTotalPages = computed(() => storage.totalPages?.value || 0)
 const storageMemoryPressure = computed(() => storage.memoryPressure?.value || 0)
 const storageLoadBalanced = computed(() => storage.isLoadBalanced?.value || false)
 const storageStats = computed(() => storage.stats || {})
+const chunkStats = computed(() => storageStats.value?.chunks || null)
+const availableForChunksRef = ref(null)
+
+// Derive a plain number for template convenience
+const availableForChunks = computed(() => availableForChunksRef.value)
 
 const handleConnect = async () => {
   try {
@@ -1000,20 +1134,34 @@ const handleConnect = async () => {
       console.log('Initializing PagingStorage...')
       await storage.initialize(pigeon.value)
       console.log('PagingStorage ready!')
+
+        // After storage initializes, compute available chunk quota (10% rule)
+        try {
+          if (storage?.chunks?.getAvailableChunkStorage) {
+            availableForChunksRef.value = await storage.chunks.getAvailableChunkStorage()
+          }
+        } catch (e) {
+          console.warn('Failed to get available chunk storage:', e)
+        }
       
       // Setup gossip message listener for announcements
       if (pigeon.value.gossipManager) {
         console.log('📡 Setting up gossip listener for node announcements...')
+        console.log('📡 Gossip manager object:', pigeon.value.gossipManager)
+        console.log('📡 Gossip manager addEventListener:', typeof pigeon.value.gossipManager.addEventListener)
+        
         pigeon.value.gossipManager.addEventListener('messageReceived', (data) => {
-          console.log('📡 Gossip message received:', data)
+          console.log('📡 [GOSSIP] Message received:', data)
+          console.log('📡 [GOSSIP] Message type:', typeof data.content, 'from:', data.from?.substring(0, 8))
           
           // Parse the gossip message
           let content = data.content
           if (typeof content === 'string') {
             try {
               content = JSON.parse(content)
+              console.log('📡 [GOSSIP] Parsed content type:', content.type)
             } catch (e) {
-              console.log('Failed to parse gossip message:', e)
+              console.log('📡 [GOSSIP] Failed to parse message:', e)
               return
             }
           }
@@ -1024,9 +1172,29 @@ const handleConnect = async () => {
             from: data.from,
             content: content
           }
+          console.log('📡 [GOSSIP] Forwarding to messageReceived handler:', messageData.content?.type)
           pigeon.value.emit('messageReceived', messageData)
         })
         console.log('✅ Gossip listener ready')
+        
+        // Poll for peer connections and log status
+        setInterval(() => {
+          const peerCount = pigeon.value.connectionManager?.peers?.size || 0
+          if (peerCount > 0) {
+            const peerIds = Array.from(pigeon.value.connectionManager.peers.keys())
+            console.log(`👥 Connected to ${peerCount} peer(s):`, peerIds.map(id => id.substring(0, 8)))
+            
+            // Request dataset announcements from connected peers
+            pigeon.value.gossipManager.broadcastMessage(JSON.stringify({
+              type: 'dataset-availability-request'
+            }), 'chat')
+            console.log('📡 Requested dataset announcements from peers')
+          } else {
+            console.log('👥 No peers connected yet (gossip messages won\'t arrive)')
+          }
+        }, 10000) // Every 10 seconds
+      } else {
+        console.warn('⚠️ Gossip manager not available')
       }
     }
   } catch (error) {
@@ -1269,6 +1437,105 @@ const searchNetworkFiles = async () => {
       console.log(`🔍 Search complete: ${p2pFileSearchResults.value.length} total results`)
     }
   }, 5000)
+}
+
+// ---------- Network Filename Search (DHT-backed Book dataset) ----------
+const dhtFilenameQuery = ref('')
+const dhtFilenameResults = ref([])
+const dhtFilenameSearching = ref(false)
+const dhtFilenameError = ref('')
+
+const tokenizeFilenameQuery = (q) => {
+  const s = String(q || '').toLowerCase().trim()
+  if (!s) return []
+  const withoutExt = s.replace(/\.[^.]+$/, '')
+  const spaced = withoutExt
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z])([A-Z][a-z])/g, '$1 $2')
+    .replace(/[._-]+/g, ' ')
+    .trim()
+  const parts = spaced.split(/\s+/).filter(Boolean)
+  const ext = (s.match(/\.([^.]+)$/)?.[1] || '').toLowerCase()
+  if (ext) parts.push(ext)
+  if (spaced) parts.push(spaced)
+  return Array.from(new Set(parts))
+}
+
+const searchDHTFilenameIndex = async () => {
+  try {
+    dhtFilenameError.value = ''
+    dhtFilenameResults.value = []
+    const query = dhtFilenameQuery.value.trim()
+    if (!query || !pigeon.value) return
+    
+    dhtFilenameSearching.value = true
+    const Book = getBook()
+    if (!Book) throw new Error('Book.js not loaded')
+
+    // Tokenize query and fetch dataset entries per token
+    const tokens = tokenizeFilenameQuery(query)
+    if (tokens.length === 0) return
+
+    const book = Book()
+    // Fetch each token’s list from DHT and populate a transient Book
+    const lists = await Promise.all(tokens.map(async (t) => {
+      try {
+        const arr = await storage.get(`dataset:file-index:${t}`)
+        return Array.isArray(arr) ? { token: t, items: arr } : { token: t, items: [] }
+      } catch (e) {
+        return { token: t, items: [] }
+      }
+    }))
+
+    for (const { token, items } of lists) {
+      for (const it of items) {
+        try {
+          const out = JSON.stringify({
+            id: it.fileHash || it.id || `${token}:${(it.filename||'')}`,
+            name: it.filename || it.name || 'unknown',
+            size: it.size || 0,
+            type: it.type || 'unknown',
+            fileHash: it.fileHash
+          })
+          book(token, out)
+        } catch {}
+      }
+    }
+
+    const index = Book.index(book)
+    const results = Book.searchIndex(index, query, { maxResults: 50 })
+
+    // Deduplicate by fileHash if present, else by name
+    const dedup = new Map()
+    for (const r of results) {
+      let parsed
+      try { parsed = JSON.parse(r.value) } catch { parsed = { id: r.key, name: r.key } }
+      const key = parsed.fileHash || parsed.id || parsed.name
+      const prev = dedup.get(key)
+      if (!prev || (r.score || 0) > (prev.score || 0)) dedup.set(key, { ...parsed, score: r.score })
+    }
+
+    // Optionally enrich with provider counts from file:<fileHash>
+    const enriched = []
+    for (const v of dedup.values()) {
+      if (v.fileHash) {
+        try {
+          const metaRaw = await storage.get(`file:${v.fileHash}`)
+          if (metaRaw) {
+            const meta = typeof metaRaw === 'string' ? JSON.parse(metaRaw) : metaRaw
+            v.providers = Array.isArray(meta?.providers) ? meta.providers.length : 0
+          }
+        } catch {}
+      }
+      enriched.push(v)
+    }
+
+    dhtFilenameResults.value = enriched
+  } catch (e) {
+    dhtFilenameError.value = e.message || String(e)
+  } finally {
+    dhtFilenameSearching.value = false
+  }
 }
 
 const uniqueFilePeers = computed(() => {
@@ -1646,6 +1913,12 @@ const loadDatasetById = async (datasetId) => {
   if (!config) {
     throw new Error(`Dataset "${datasetId}" not found`)
   }
+  // Remote datasets are not loaded locally; they are searched via peers
+  if (config.remote) {
+    console.log(`🌐 '${datasetId}' is a remote dataset; selecting for peer search`)
+    searchDataset.value = datasetId
+    return
+  }
   
   // Initialize dataset state
   if (!datasets.value[datasetId]) {
@@ -2010,6 +2283,14 @@ const performSearch = async () => {
   }
 }
 
+// Helper to select a dataset from UI (including remote ones)
+const selectDataset = (id) => {
+  if (!id) return
+  if (!AVAILABLE_DATASETS[id]) return
+  searchDataset.value = id
+  console.log(`📚 Selected dataset: ${id}`)
+}
+
 // Calculate match score for sorting results
 const calculateMatchScore = (result, query) => {
   // Use existing score if available (from Book.js or substring matching)
@@ -2067,6 +2348,125 @@ const escapeRegex = (str) => {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+// Helper to check if a search result is a file (from file-index dataset)
+const isFileResult = (result) => {
+  if (!result || !result.value) return false
+  try {
+    const parsed = JSON.parse(result.value)
+    return parsed && (parsed.id || parsed.name) && parsed.size !== undefined
+  } catch {
+    return false
+  }
+}
+
+// Helper to extract file ID from result
+const getFileId = (result) => {
+  try {
+    const parsed = JSON.parse(result.value)
+    return parsed.id || parsed.name || result.key
+  } catch {
+    return result.key
+  }
+}
+
+// Helpers to extract file info for display
+const getFileName = (result) => {
+  try { const p = JSON.parse(result.value); return p.name || p.id || result.key } catch { return result.key }
+}
+const getFileSize = (result) => {
+  try { const p = JSON.parse(result.value); return Number(p.size) || 0 } catch { return 0 }
+}
+const getFileType = (result) => {
+  try { const p = JSON.parse(result.value); return p.type || 'application/octet-stream' } catch { return 'application/octet-stream' }
+}
+
+// Basic file result stats for dataset search results
+const fileResultStats = computed(() => {
+  const items = (searchResults.value || []).filter(isFileResult)
+  let total = 0
+  const typeCounts = new Map()
+  for (const r of items) {
+    const size = getFileSize(r)
+    total += Number(size) || 0
+    const t = getFileType(r)
+    typeCounts.set(t, (typeCounts.get(t) || 0) + 1)
+  }
+  const count = items.length
+  const avg = count ? total / count : 0
+  let topType = null
+  if (typeCounts.size) {
+    topType = Array.from(typeCounts.entries()).sort((a, b) => b[1] - a[1])[0][0]
+  }
+  return { count, total, avg, topType }
+})
+
+// Basic file result stats for P2P file search results
+const p2pFileStats = computed(() => {
+  const items = p2pFileSearchResults.value || []
+  let total = 0
+  const typeCounts = new Map()
+  for (const f of items) {
+    const size = Number(f.size) || 0
+    total += size
+    const t = f.type || 'unknown'
+    typeCounts.set(t, (typeCounts.get(t) || 0) + 1)
+  }
+  const count = items.length
+  const avg = count ? total / count : 0
+  let topType = null
+  if (typeCounts.size) {
+    topType = Array.from(typeCounts.entries()).sort((a, b) => b[1] - a[1])[0][0]
+  }
+  return { count, total, avg, topType }
+})
+
+// Download a file from a dataset search result
+const downloadDatasetFile = async (result) => {
+  try {
+    const fileInfo = JSON.parse(result.value)
+    const fileId = fileInfo.id || fileInfo.name
+    
+    console.log(`📥 Starting download for file: ${fileInfo.name}`)
+    
+    // Request file from server node
+    if (!pigeon.value) {
+      alert('Not connected to network')
+      return
+    }
+    
+    // Initialize download tracking with metadata
+    const CHUNK_SIZE = 64 * 1024
+    downloadingFiles.value[fileId] = {
+      name: fileInfo.name,
+      type: fileInfo.type || 'application/octet-stream',
+      size: fileInfo.size || 0,
+      totalChunks: fileInfo.size ? Math.ceil(fileInfo.size / CHUNK_SIZE) : undefined,
+      progress: 0,
+      received: 0,
+      chunks: [],
+      mode: 'dataset'
+    }
+    
+    // Request file chunks from network
+    const chunkRequestMessage = {
+      type: 'file-chunk-request',
+      fileId: fileId,
+      chunkIndex: 0
+    }
+    
+    // Broadcast request via gossip
+  await pigeon.value.gossipManager.broadcastMessage(JSON.stringify(chunkRequestMessage), 'chat')
+    console.log(`📤 Requested file chunks for: ${fileInfo.name}`)
+    
+    // Note: File chunks will be received via messageReceived handler
+    // which already handles 'file-chunk' messages and assembles them
+    
+  } catch (error) {
+    console.error('Download error:', error)
+    alert(`Failed to download file: ${error.message}`)
+  }
+}
+
 // Handle dataset search messages from peers
 const setupDatasetMessageHandlers = () => {
   if (!pigeon.value) {
@@ -2098,6 +2498,51 @@ const setupDatasetMessageHandlers = () => {
     }
     
     console.log('📨 Received message:', parsedContent.type, 'from', from?.substring(0, 8))
+
+    // Handle incoming file chunks for dataset-initiated downloads
+    if (parsedContent.type === 'file-chunk') {
+      const { fileId, chunkIndex, chunk, isLastChunk } = parsedContent
+      const dl = downloadingFiles.value[fileId]
+      if (dl && dl.mode === 'dataset') {
+        try {
+          const chunkData = new Uint8Array(chunk)
+          dl.chunks[chunkIndex] = chunkData
+          dl.received += chunkData.length
+          if (dl.size) {
+            dl.progress = (dl.received / dl.size) * 100
+          } else if (dl.totalChunks) {
+            const receivedChunks = dl.chunks.filter(Boolean).length
+            dl.progress = (receivedChunks / dl.totalChunks) * 100
+          }
+          // Request next chunk or finish
+          if (!isLastChunk) {
+            const nextIndex = chunkIndex + 1
+            const req = {
+              type: 'file-chunk-request',
+              fileId,
+              chunkIndex: nextIndex
+            }
+            await pigeon.value.sendDirectMessage(from, req)
+          } else {
+            // Assemble and trigger download
+            console.log(`✅ All chunks received for ${dl.name}, assembling...`)
+            const blob = new Blob(dl.chunks, { type: dl.type })
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement('a')
+            a.href = url
+            a.download = dl.name
+            document.body.appendChild(a)
+            a.click()
+            document.body.removeChild(a)
+            URL.revokeObjectURL(url)
+            delete downloadingFiles.value[fileId]
+          }
+        } catch (e) {
+          console.error('Failed processing incoming chunk:', e)
+        }
+        return // handled
+      }
+    }
     
     // Get the dataset being searched
     const targetDatasetId = parsedContent.dataset || searchDataset.value
@@ -2214,7 +2659,44 @@ const setupDatasetMessageHandlers = () => {
       
     } else if (parsedContent.type === 'node-announcement') {
       // Server node announcing its available files
-      console.log(`📡 Node announcement from ${from?.substring(0, 8)}: ${parsedContent.files?.length || 0} files`)
+      console.log(`📡 Node announcement from ${from?.substring(0, 8)}: ${parsedContent.files?.length || 0} files, ${parsedContent.datasets?.length || 0} datasets`)
+      console.log(`📡 Datasets in announcement:`, parsedContent.datasets)
+      // Also record datasets, including 'file-index'
+      if (Array.isArray(parsedContent.datasets)) {
+        console.log(`📡 Processing ${parsedContent.datasets.length} datasets...`)
+        for (const ds of parsedContent.datasets) {
+          const id = ds.name
+          console.log(`📡 Processing dataset: ${id}`, ds)
+          if (!id) continue
+          if (!peerDatasets.value[id]) {
+            peerDatasets.value[id] = {
+              id,
+              name: id,
+              icon: id === 'file-index' ? '🗂️' : '🗃️',
+              remote: true,
+              itemCount: ds.itemCount || 0,
+              indexSize: ds.indexSize || 0,
+              lastSeen: Date.now(),
+              peerIds: new Set([from])
+            }
+            // Add to AVAILABLE_DATASETS for selector (no URL -> remote only)
+            AVAILABLE_DATASETS[id] = {
+              id,
+              name: id,
+              icon: peerDatasets.value[id].icon,
+              url: null,
+              remote: true,
+              loader: (raw) => raw // unused for remote datasets
+            }
+            console.log(`🗂️ Discovered remote dataset: ${id} (items=${ds.itemCount}, index=${ds.indexSize})`)
+          } else {
+            peerDatasets.value[id].itemCount = ds.itemCount || peerDatasets.value[id].itemCount
+            peerDatasets.value[id].indexSize = ds.indexSize || peerDatasets.value[id].indexSize
+            peerDatasets.value[id].lastSeen = Date.now()
+            peerDatasets.value[id].peerIds.add(from)
+          }
+        }
+      }
       
       if (parsedContent.files && parsedContent.files.length > 0) {
         // Store peer's file list for automatic discovery
@@ -2265,6 +2747,30 @@ const setupDatasetMessageHandlers = () => {
         const peerResults = parsedContent.results.map(r => ({ ...r, source: 'peer' }))
         searchResults.value = [...searchResults.value, ...peerResults]
         searchPeerResults.value += parsedContent.results.length
+        
+        // Deduplicate results intelligently based on content type
+        const seen = new Map()
+        for (const result of searchResults.value) {
+          let dedupKey = result.key
+          
+          // For file results (JSON values with id/name), deduplicate by file ID
+          try {
+            const parsed = JSON.parse(result.value)
+            if (parsed && (parsed.id || parsed.name)) {
+              dedupKey = parsed.id || parsed.name // Use file ID for file results
+            }
+          } catch {
+            // Not JSON or not a file - use key as-is (e.g., Bible verses)
+          }
+          
+          const existing = seen.get(dedupKey)
+          // Keep the result with the highest score
+          if (!existing || (result.score || 0) > (existing.score || 0)) {
+            seen.set(dedupKey, result)
+          }
+        }
+        searchResults.value = Array.from(seen.values())
+        console.log(`📊 Deduplicated to ${searchResults.value.length} unique results`)
         
         // Sort combined results by relevance to the search query
         const query = searchQuery.value?.toLowerCase().trim()

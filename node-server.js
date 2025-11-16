@@ -15,6 +15,61 @@ import http from 'http'
 import { WebSocket } from 'ws'
 import crypto from 'crypto'
 
+// Console filter: allow ONLY dataset file search and file transfer logs (keep errors)
+(() => {
+  const original = {
+    log: console.log,
+    info: console.info,
+    debug: console.debug,
+    warn: console.warn,
+  }
+  const allow = (...args) => {
+    try {
+      const texts = args.filter(a => typeof a === 'string')
+      if (texts.length === 0) return false
+      const s = texts.join(' ')
+      return (
+        s.includes('[SEARCH]') ||
+        s.includes('[DOWNLOAD]') ||
+        s.includes('File search') ||
+        s.includes('file-search') ||
+        s.includes('file results') ||
+        s.includes('file list') ||
+        s.includes('Sent chunk') ||
+        s.includes('Starting upload') ||
+        s.includes('Starting file receive') ||
+        s.includes('File received') ||
+        s.includes('Sending:') ||
+        s.includes('File sent') ||
+        s.includes('Progress:') ||
+        s.includes('📥') ||
+        s.includes('📤') ||
+        // Startup and peer connection logs
+        s.includes('Starting PigeonFS') ||
+        s.includes('Connecting to network') ||
+  s.includes('HTTP upload server:') ||
+  s.includes('Upload files at:') ||
+        s.includes('Connecting to: wss') ||
+        s.includes('Connected to PigeonHub') ||
+        s.includes('Connected with peer ID:') ||
+        s.includes('Peer connected:') ||
+        s.includes('Peer disconnected:') ||
+        s.includes('Requesting peer list from PigeonHub') ||
+        s.includes('Standalone mode (no peers connected)')
+      )
+    } catch {
+      return false
+    }
+  }
+  const filtered = (method) => (...args) => {
+    if (allow(...args)) original[method](...args)
+  }
+  console.log = filtered('log')
+  console.info = filtered('info')
+  console.debug = filtered('debug')
+  console.warn = filtered('warn')
+})()
+
 // Polyfill WebSocket for Node.js environment
 if (typeof global.WebSocket === 'undefined') {
   global.WebSocket = WebSocket
@@ -69,7 +124,7 @@ class PigeonFSNode {
     console.log(`🌐 Connecting to network: ${this.config.networkName}`)
     this.pigeon = new PeerPigeonMesh({
       networkName: this.config.networkName,
-      enableWebDHT: false,
+      enableWebDHT: true,
       enableCrypto: this.config.enableCrypto,
       enableDistributedStorage: false,
       maxPeers: 50,
@@ -260,6 +315,61 @@ class PigeonFSNode {
   async handleSearchRequest(request, fromPeerId) {
     const { query, dataset, requestId } = request
     const datasetName = dataset || 'bible-kjv'
+
+    // Special-case: file-index dataset should be served from DHT-backed index
+    if (datasetName === 'file-index') {
+      try {
+        // Gather from local index (if available) and DHT-backed dataset
+        let combined = []
+        try {
+          if (this.filesIndex && this.files && this.files.size > 0) {
+            const local = Book.searchIndex(this.filesIndex, query, { maxResults: 50 })
+            combined = combined.concat(local)
+          }
+        } catch {}
+        try {
+          const dht = await this.searchDHTFileIndex(query)
+          combined = combined.concat(dht)
+        } catch {}
+        if (!combined.length) return
+
+        // Dedupe to unique files (prefer higher score)
+        const seen = new Map()
+        for (const r of combined) {
+          try {
+            const v = typeof r.value === 'string' ? JSON.parse(r.value) : r.value
+            const id = v?.id || v?.fileHash || v?.name || r.key
+            const prev = seen.get(id)
+            if (!prev || (r.score || 0) > (prev.score || 0)) {
+              seen.set(id, r)
+            }
+          } catch {
+            // If parsing fails, key by r.key
+            const prev = seen.get(r.key)
+            if (!prev || (r.score || 0) > (prev.score || 0)) {
+              seen.set(r.key, r)
+            }
+          }
+        }
+        const merged = Array.from(seen.values())
+        // If exactly one unique file, send 1 result; else cap to 10
+        const limited = merged.length === 1 ? merged.slice(0, 1) : merged.slice(0, 10)
+        if (limited.length > 0) {
+          const response = {
+            type: 'dataset-search-response',
+            requestId,
+            dataset: datasetName,
+            results: limited,
+            query
+          }
+          await this.pigeon.gossipManager.broadcastMessage(JSON.stringify(response), 'chat')
+          console.log(`📤 Sent ${limited.length} results for "${query}"`)
+        }
+      } catch (e) {
+        console.warn('file-index dataset search failed:', e)
+      }
+      return
+    }
     
     // Lookup dataset by name to get the hash
     const datasetHash = this.datasetsByName.get(datasetName)
@@ -334,26 +444,59 @@ class PigeonFSNode {
   async handleFileSearchRequest(request, fromPeerId) {
     const { query, requestId } = request
     
-    if (!this.filesIndex || this.files.size === 0) {
-      console.log(`🔍 File search request but no files hosted`)
-      return
-    }
+    const hasLocalIndex = !!this.filesIndex && this.files.size > 0
 
     console.log(`🔍 File search request: "${query}" from ${fromPeerId.substring(0, 8)}`)
-    console.log(`🔍 Index has ${Object.keys(this.filesIndex).length} words`)
-    console.log(`🔍 Searching for: ${query.toLowerCase()}`)
+    if (hasLocalIndex) {
+      console.log(`🔍 Local index has ${Object.keys(this.filesIndex).length} words`)
+      console.log(`🔍 Searching for: ${query.toLowerCase()}`)
+    } else {
+      console.log(`🔍 No local files index; falling back to DHT file-index dataset`)
+    }
+
+    // Gather results: prefer local index, then augment with DHT dataset
+    let combined = []
+    try {
+      if (hasLocalIndex) {
+        const local = Book.searchIndex(this.filesIndex, query, { maxResults: 50 })
+        combined = combined.concat(local.map(r => ({ ...r, _source: 'local' })))
+      }
+    } catch (e) {
+      console.warn('Local index search failed:', e)
+    }
+
+    try {
+      const dhtResults = await this.searchDHTFileIndex(query)
+      combined = combined.concat(dhtResults.map(r => ({ ...r, _source: 'dht' })))
+    } catch (e) {
+      console.warn('DHT dataset search failed:', e)
+    }
+
+    // Deduplicate by file id or filename
+    const seen = new Map()
+    const merged = []
+    for (const r of combined) {
+      let id = null
+      try {
+        const v = typeof r.value === 'string' ? JSON.parse(r.value) : r.value
+        id = v?.id || v?.fileHash || r.key
+      } catch {
+        id = r.key
+      }
+      const prev = seen.get(id)
+      if (!prev || (r.score || 0) > (prev.score || 0)) {
+        seen.set(id, r)
+      }
+    }
+    seen.forEach(v => merged.push(v))
     
-    // Search the Book.js index
-    const results = Book.searchIndex(this.filesIndex, query, { maxResults: 20 })
+    console.log(`🔍 Found ${merged.length} matching files for "${query}"`)
     
-    console.log(`🔍 Found ${results.length} matching files for "${query}"`)
-    console.log(`🔍 Results:`, results)
-    
-    if (results.length > 0) {
+    if (merged.length > 0) {
       const response = {
         type: 'file-search-response',
         requestId,
-        results: results.map(r => {
+        results: merged.map(r => {
           // Parse the JSON value back to file object
           try {
             const file = JSON.parse(r.value)
@@ -380,15 +523,70 @@ class PigeonFSNode {
       }
       
       await this.pigeon.gossipManager.broadcastMessage(JSON.stringify(response), 'chat')
-      console.log(`📤 Broadcasted ${results.length} file results for "${query}"`)
+      console.log(`📤 Broadcasted ${merged.length} file results for "${query}"`)
     } else {
       console.log(`🔍 No matching files found for "${query}"`)
     }
   }
 
+  // Build a transient Book.js index directly from the DHT-backed dataset:file-index:* entries
+  async searchDHTFileIndex(query) {
+    try {
+      const tokens = this.tokenizeQuery(query)
+      if (!tokens.length) return []
+      const book = Book()
+      // Fetch entries for each token from WebDHT
+      const lists = await Promise.all(tokens.map(async (t) => {
+        try {
+          const key = `dataset:file-index:${t}`
+          const arr = await this.pigeon.webDHT.get(key)
+          return Array.isArray(arr) ? { token: t, items: arr } : { token: t, items: [] }
+        } catch (e) {
+          return { token: t, items: [] }
+        }
+      }))
+      // Populate book: key = token, value = JSON string of minimal file metadata
+      for (const { token, items } of lists) {
+        for (const it of items) {
+          try {
+            const out = JSON.stringify({
+              id: it.fileHash || it.id || `${token}:${(it.filename||'')}`,
+              name: it.filename || it.name || 'unknown',
+              size: it.size || 0,
+              type: it.type || 'unknown'
+            })
+            book(token, out)
+          } catch {}
+        }
+      }
+      const index = Book.index(book)
+      const results = Book.searchIndex(index, query, { maxResults: 50 })
+      return results
+    } catch (e) {
+      console.warn('searchDHTFileIndex error:', e)
+      return []
+    }
+  }
+
+  tokenizeQuery(q) {
+    const s = String(q || '').toLowerCase().trim()
+    const withoutExt = s.replace(/\.[^.]+$/, '')
+    const spaced = withoutExt
+      .replace(/([a-z])([A-Z])/g, '$1 $2')
+      .replace(/([A-Z])([A-Z][a-z])/g, '$1 $2')
+      .replace(/[._-]+/g, ' ')
+      .trim()
+    const parts = spaced.split(/\s+/).filter(Boolean)
+    const ext = (s.match(/\.([^.]+)$/)?.[1] || '').toLowerCase()
+    if (ext) parts.push(ext)
+    if (spaced) parts.push(spaced)
+    return Array.from(new Set(parts))
+  }
+
   async handleAvailabilityRequest(fromPeerId) {
     const availability = {
       type: 'dataset-availability-response',
+      peerId: this.pigeon?.peerId,
       datasets: Array.from(this.datasets.values()).map(ds => {
         return {
           name: ds.name,
@@ -415,6 +613,7 @@ class PigeonFSNode {
   async handleFileListRequest(fromPeerId) {
     const fileList = {
       type: 'file-list-response',
+      peerId: this.pigeon?.peerId,
       files: Array.from(this.files.keys()).map(fileId => {
         const file = this.files.get(fileId)
         return {
@@ -641,6 +840,80 @@ class PigeonFSNode {
     
     console.log(`🔍 Created searchable index for ${this.files.size} files`)
     console.log(`🔍 Sample index keys:`, Object.keys(this.filesIndex).slice(0, 30).join(', '))
+
+    // Also register/update this index as a dataset named "file-index" so it shows in Loaded Datasets
+    this.registerFileIndexDataset()
+    // Persist snapshot to disk for visibility on restart
+    this.saveFileIndexDatasetToDisk().catch(() => {})
+  }
+
+  // Create an in-memory dataset entry for the local file index so it participates in dataset APIs
+  registerFileIndexDataset() {
+    try {
+      const datasetName = 'file-index'
+      // Minimal data payload: one entry per file (used only for counts/metadata)
+      const data = Array.from(this.files.values()).map(file => ({
+        key: file.name,
+        value: JSON.stringify({ id: file.id, name: file.name, size: file.size, type: file.type })
+      }))
+
+      // Stable-ish hash for the dataset based on the current index keys and file list
+      const keysPart = JSON.stringify(Object.keys(this.filesIndex || {}).sort())
+      const filesPart = JSON.stringify(data.map(d => d.key).sort())
+      const sha1Hash = crypto.createHash('sha1').update(keysPart + '|' + filesPart).digest('hex')
+
+      // Compute checksum from normalized data entries for display/verification
+      const sortedDataString = JSON.stringify(data.sort((a, b) => 
+        JSON.stringify(a).localeCompare(JSON.stringify(b))
+      ))
+      const checksum = crypto.createHash('sha256').update(sortedDataString).digest('hex')
+
+      // Remove previous registration(s) of file-index to avoid duplicates (including disk-loaded)
+      for (const [hash, ds] of Array.from(this.datasets.entries())) {
+        if (ds?.name === datasetName) {
+          this.datasets.delete(hash)
+        }
+      }
+
+      // Guard: ensure index exists
+      const index = this.filesIndex || {}
+
+      this.datasets.set(sha1Hash, {
+        book: null, // Not storing full Book here; index is sufficient for searching
+        index,
+        data,
+        name: datasetName,
+        hash: sha1Hash,
+        checksum: checksum,
+        itemCount: data.length,
+        indexSize: Object.keys(index).length
+      })
+
+      // Map the name to the hash for lookups
+      this.datasetsByName.set(datasetName, sha1Hash)
+      this.fileIndexDatasetHash = sha1Hash
+
+      console.log(`✅ Registered dataset: ${datasetName} (${data.length} items, ${Object.keys(index).length} index entries)`) 
+    } catch (e) {
+      console.warn('Failed to register file-index dataset:', e)
+    }
+  }
+
+  async saveFileIndexDatasetToDisk() {
+    try {
+      const datasetsDir = path.join(this.config.dataDir, 'datasets')
+      await fs.mkdir(datasetsDir, { recursive: true })
+      // Use the same data shape as registerFileIndexDataset
+      const data = Array.from(this.files.values()).map(file => ({
+        key: file.name,
+        value: JSON.stringify({ id: file.id, name: file.name, size: file.size, type: file.type })
+      }))
+      const filePath = path.join(datasetsDir, 'file-index.json')
+      await fs.writeFile(filePath, JSON.stringify(data, null, 2), 'utf8')
+      console.log(`💾 Saved file-index dataset snapshot to ${filePath} (${data.length} items)`) 
+    } catch (e) {
+      console.warn('Failed to save file-index dataset to disk:', e)
+    }
   }
 
   generateFileId(filename) {
@@ -981,16 +1254,21 @@ class PigeonFSNode {
   }
 
   announceAvailability() {
+    const datasetsArray = Array.from(this.datasets.values()).map(ds => ({
+      name: ds.name,
+      hash: ds.hash,
+      checksum: ds.checksum,
+      itemCount: ds.itemCount,
+      indexSize: ds.indexSize
+    }))
+    
+    console.log(`📡 Preparing announcement with ${datasetsArray.length} datasets:`, datasetsArray.map(d => d.name))
+    
     const message = {
       type: 'node-announcement',
+      peerId: this.pigeon?.peerId,
       nodeType: 'pigeonfs-server',
-      datasets: Array.from(this.datasets.values()).map(ds => ({
-        name: ds.name,
-        hash: ds.hash,
-        checksum: ds.checksum,
-        itemCount: ds.itemCount,
-        indexSize: ds.indexSize
-      })),
+      datasets: datasetsArray,
       files: Array.from(this.files.keys()).map(fileId => {
         const file = this.files.get(fileId)
         return {
@@ -1005,6 +1283,7 @@ class PigeonFSNode {
     
     this.pigeon.gossipManager.broadcastMessage(JSON.stringify(message), 'chat')
     console.log(`📡 Announced availability to network (${this.datasets.size} datasets, ${this.files.size} files)`)
+    console.log(`📡 Full announcement message:`, JSON.stringify(message, null, 2))
     
     // Exponential backoff: Start at 5s, double each time up to max 5 minutes
     if (!this.announceInterval) {

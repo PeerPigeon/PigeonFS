@@ -16,13 +16,16 @@ PigeonFS enables direct file transfer between browsers with no central server. S
 - 🔒 **Optional Encryption** - End-to-end encryption with AES-GCM (toggle in UI)
 
 ### Distributed Storage (PagingStorage)
-- 💾 **Key-Value Store** - Store any data type (strings, numbers, objects, binary)
-- 🔄 **DHT Routing** - Consistent hashing distributes data across peers automatically
-- 📑 **Page-based Architecture** - Efficient 4KB pages with automatic splitting/merging
-- 🔐 **Replication** - Configurable replication factor (default: 3 copies)
-- 💽 **Persistence** - IndexedDB backing with LRU cache for remote pages
-- ⚖️ **Load Balancing** - Automatic redistribution when peers join/leave
-- 🌐 **Peer Sync** - Real-time synchronization across connected peers
+
+### Chunk Storage System (NEW!)
+- 🧩 **Intelligent Chunking** - Automatic file splitting into 64KB chunks
+- 🌐 **Platform-Aware** - Different strategies for browser vs node peers
+  - **Browser**: Store only chunks based on DHT proximity (saves space)
+  - **Node/App**: Use 10% of quota for chunks + whole files if they fit
+- � **Filename Hash Index** - Fast O(1) lookups with case-insensitive search
+- 📊 **Quota Management** - Automatic LRU eviction and cleanup
+- 🔄 **DHT Distribution** - Chunks distributed via consistent hashing
+- 💾 **Hybrid Storage** - Small files stored whole, large files chunked
 
 ### Dataset Search
 - 📁 **JSON Dataset Upload** - Upload structured datasets to make searchable locally
@@ -89,6 +92,10 @@ npm run dev
 npm run build
 npm run preview
 ```
+
+### Documentation
+
+- Chunk Storage: see `docs/CHUNK_STORAGE.md` and `docs/CHUNK_STORAGE_QUICK_REF.md`
 
 ### CLI Server
 

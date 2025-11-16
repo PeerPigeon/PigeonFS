@@ -13,6 +13,7 @@ const rootDir = join(__dirname, '..')
 let mainWindow
 let serverProcess
 let currentDataDir = null
+let currentHttpPort = null
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -73,7 +74,8 @@ function startServer(config = {}) {
       stdio: 'pipe'
     })
 
-    let actualPort = null
+  let actualPort = null
+  let startedResolved = false
 
     serverProcess.stdout.on('data', (data) => {
       const message = data.toString()
@@ -82,16 +84,22 @@ function startServer(config = {}) {
         mainWindow.webContents.send('server-log', message)
       }
       
-      // Extract actual port from log message
-      const portMatch = message.match(/HTTP server listening on http:\/\/localhost:(\d+)/)
-      if (portMatch) {
-        actualPort = portMatch[1]
+      // Extract actual port from log message (handle multiple possible formats)
+      // 1) "HTTP server listening on http://localhost:<port>"
+      // 2) "Upload files at: http://localhost:<port>"
+      const portMatch1 = message.match(/HTTP server listening on http:\/\/localhost:(\d+)/)
+      const portMatch2 = message.match(/Upload files at:\s*http:\/\/localhost:(\d+)/)
+      const match = portMatch1 || portMatch2
+      if (match && !startedResolved) {
+        actualPort = match[1]
+        currentHttpPort = actualPort
         if (mainWindow) {
           mainWindow.webContents.send('server-started', {
             httpPort: actualPort,
             signalingUrl: config.signalingUrl
           })
         }
+        startedResolved = true
         resolve({ port: actualPort })
       }
     })
@@ -113,11 +121,18 @@ function startServer(config = {}) {
       if (mainWindow) {
         mainWindow.webContents.send('server-stopped', code)
       }
+      serverProcess = null
+      currentHttpPort = null
     })
 
     // Timeout if server doesn't start
     setTimeout(() => {
-      resolve({ port: env.HTTP_PORT })
+      if (!startedResolved) {
+        // If the server hasn't reported the actual port yet, resolve with configured port
+        // (may be '0', in which case UI should wait for server-started event)
+        startedResolved = true
+        resolve({ port: env.HTTP_PORT })
+      }
     }, 5000)
   })
 }
@@ -181,8 +196,9 @@ ipcMain.handle('upload-file', async (event, { fileName, fileBuffer }) => {
 
 ipcMain.handle('get-server-status', () => {
   return {
-    running: serverProcess !== null,
-    pid: serverProcess?.pid
+    running: !!serverProcess,
+    pid: serverProcess?.pid,
+    port: currentHttpPort
   }
 })
 
