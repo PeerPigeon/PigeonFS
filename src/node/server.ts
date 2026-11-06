@@ -4,7 +4,9 @@
  * carries their signaling. Peers find it through the relays (it announces the
  * role 'storage'), link to it over WebRTC, and move their records to it.
  *
- *   npm run server -- [--dir pigeonfs-server] [--signal ws://…]
+ *   npm run server -- [--dir pigeonfs-server] [--signal ws://…] [--no-page]
+ *
+ * It serves the PigeonFS page as well (https, port 5173), unless --no-page.
  *
  * It never sees a room, a key or a value: each record is the room's own
  * ciphertext under a hashed slot. Records are kept in --dir, one folder per room.
@@ -64,6 +66,18 @@ async function main(): Promise<void> {
   const server = PeerPigeonNode.storageServer(signal ? { signalingServer: signal, automaticSignalingServer: false } : {}, await fsRecordStore(dir));
   await server.start();
   console.log(`PigeonFS storage server is up; keeping records in ${dir}.`);
+  // The page too, from the same command (--no-page to leave it out).
+  if (!process.argv.includes('--no-page')) {
+    try {
+      const { createServer } = await import('vite');
+      const page = await createServer({ configFile: path.resolve(import.meta.dirname, '../../vite.config.ts') });
+      await page.listen();
+      const urls = page.resolvedUrls;
+      for (const u of [...(urls?.local ?? []), ...(urls?.network ?? [])]) console.log(`Page: ${u}?network=pigeonfs&room=main`);
+    } catch (e) {
+      console.log(`The page could not start (${(e as Error).message}); the server runs without it.`);
+    }
+  }
   let last = '';
   setInterval(async () => {
     const s = await server.stats();

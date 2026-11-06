@@ -32,7 +32,7 @@ It holds what it fetched or was given in `--dir` (chunks under `chunks/`, its fi
 npm run server -- --dir pigeonfs-server
 ```
 
-A server keeps PeerPigeon storage for any app and any room, the way a relay carries its signaling. Every PeerPigeon peer looks for servers and uses them when there are any; with none, storage works across the mesh as before.
+It serves the page too (https, port 5173; `--no-page` to leave it out), so one command runs both. A server keeps PeerPigeon storage for any app and any room, the way a relay carries its signaling. Every PeerPigeon peer looks for servers and uses them when there are any; with none, storage works across the mesh as before.
 
 - **Found like relays.** A server announces the role `storage` in one scope (`peerpigeon-storage` / `servers`), and relays list it first. A peer dials only the servers it needs, over WebRTC, and the relays only signal.
 - **Kademlia placement.** A room's records live on the 3 servers whose ids are closest (XOR of SHA-256) to the room's id. When a server joins or leaves, they are handed to whichever servers are now closest.
