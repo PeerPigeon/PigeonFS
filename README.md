@@ -28,11 +28,24 @@ It holds what it fetched or was given in `--dir` (chunks under `chunks/`, its fi
 
 ## How it works
 
+### PeerPigeon's storage spaces
+
+| Space | Key | What |
+|---|---|---|
+| `frozen` | `pfs/m/<file id>` | Each file's manifest: written once (its key is its hash), fetched from any peer holding it, checked against the id. Kept only by peers that use it. |
+| `user` | `pfs/holds/<owner>` | What each peer holds (its files, its bytes, its mesh id now): only that peer can change it, and every PigeonFS peer replicates it, so holders are known without asking. |
+
+PeerPigeon catches a newly linked peer up only on records it has asked for, so each peer also says where its holdings record is (`owner`, at start, when a peer links, and every 30 s); a peer hearing of one it lacks asks for it, and keeps it current from then on. A Node peer keeps its key pair (its storage identity) in its `--dir`; a browser keeps its own.
+
+### Messages
+
 | Message | To | What for |
 |---|---|---|
 | `have` | everyone | "I hold these files" (on sharing, and on finishing a fetch) |
 | `find` → `found` | everyone → the asker | Files whose names hold every word of a query, or one file by id |
-| `man?` → `man` | one holder | A file's manifest (checked against the file's id) |
+| `man?` → `man` | one holder | A file's manifest, when the frozen space has no answer |
+| `gone` | everyone | "I no longer hold these" |
+| `owner` | everyone, or one peer | Where this peer's holdings record is |
 | `chunk?` → `chunk` | one holder | A chunk by its SHA-256 (checked on arrival) |
 | `offer` | one peer | "Here's a file for you": it fetches it like any other |
 

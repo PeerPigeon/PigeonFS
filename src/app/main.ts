@@ -51,6 +51,7 @@ async function main(): Promise<void> {
   const { chunks, library } = await idbStores();
   const mesh = await joinMesh({ network, room, signal: query.get('signal') ?? undefined, automatic: query.get('auto') !== '0' });
   const fs = new PigeonFS(mesh, chunks, library);
+  await fs.start();
   (globalThis as Record<string, unknown>).pigeonfs = fs;
   $<HTMLButtonElement>('find-button').disabled = false;
   $('s-self').textContent = mesh.self.slice(0, 12);
@@ -58,13 +59,18 @@ async function main(): Promise<void> {
   $('s-self').title = mesh.self;
   $('s-room').textContent = `${network} / ${room}`;
 
-  const renderMesh = () => {
+  const renderMesh = async () => {
     const peers = mesh.peers();
     $('status').textContent = peers.length ? `${plural(peers.length, 'peer')} linked` : 'Alone so far';
     $('live-dot').hidden = !peers.length;
     $('s-relay').textContent = mesh.relay() || '…';
     $('s-relay').title = mesh.relay();
-    $('peers').replaceChildren(...peers.map((p) => el('li', {}, el('b', { textContent: p.slice(0, 12), title: p }), el('span', { textContent: 'linked' }))));
+    // What each linked peer holds, from its holdings record (user space).
+    const held = new Map((await fs.holdings()).map((h) => [h.peer, h]));
+    $('peers').replaceChildren(...peers.map((p) => {
+      const h = held.get(p);
+      return el('li', {}, el('b', { textContent: p.slice(0, 12), title: p }), el('span', { textContent: h ? `${plural(h.files.length, 'file')} · ${size(h.bytes)}` : 'linked' }));
+    }));
   };
 
   // Saving a held file: its chunks as a Blob, downloaded under its name.
@@ -162,8 +168,8 @@ async function main(): Promise<void> {
     renderResults();
   });
 
-  fs.on('change', () => { renderMesh(); renderOffers(); renderResults(); void renderMine(); });
-  renderMesh();
+  fs.on('change', () => { void renderMesh(); renderOffers(); renderResults(); void renderMine(); });
+  void renderMesh();
   renderOffers();
   await renderMine();
   setInterval(renderMesh, 3000);

@@ -118,3 +118,33 @@ test('on disk (a Node peer): chunks and library stay across a restart', async ()
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('storage spaces: manifests in frozen, each peer\'s holdings in user (replicated, its own); a fetch finds holders from holdings alone', async () => {
+  const sim = new SimMesh();
+  const [a, b, c] = [peer(sim), peer(sim), peer(sim)];
+  for (const p of [a, b, c]) await p.start();
+  const data = random(CHUNK_BYTES * 2 + 5, 11);
+  const entry = await a.share(data, 'report.pdf', 'application/pdf');
+  const sa = a.mesh.storage!, sb = b.mesh.storage!;
+  assert.deepEqual(await sa.get('frozen', `pfs/m/${entry.id}`), entry.manifest, 'the manifest is in frozen');
+  await assert.rejects(sa.put('frozen', `pfs/m/${entry.id}`, { v: 1 }), /denied/, 'and cannot be changed');
+  await new Promise((r) => setTimeout(r, 400));
+  // B knows what A holds from A's holdings record, without asking.
+  const fromA = (await b.holdings()).find((h) => h.peer === a.self);
+  assert.deepEqual(fromA?.files.map((f) => f.name), ['report.pdf']);
+  // Only A can change A's record.
+  await assert.rejects(sb.put('user', `pfs/holds/${sa.owner}`, { peer: b.self, files: [], bytes: 0, at: 0 }), /denied/);
+  // C fetches with no search and no holders given: they come from the holdings records.
+  await c.fetch(entry.id);
+  assert.deepEqual(await c.read(entry.id), data);
+  await new Promise((r) => setTimeout(r, 400));
+  const now = await b.holdings();
+  assert.deepEqual(now.filter((h) => h.files.some((f) => f.id === entry.id)).map((h) => h.peer).sort(), [a.self, c.self].sort(), 'C says it holds it too');
+  // Removing it: A's record no longer lists it.
+  await a.remove(entry.id);
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal((await b.holdings()).find((h) => h.peer === a.self)?.files.length, 0);
+  // A search sees holdings at once.
+  const found = await b.search('report');
+  assert.deepEqual(found[0]?.holders, [c.self]);
+});

@@ -2,10 +2,18 @@
  * PigeonFS on a PeerPigeon node. Relays are PeerPigeon's own choice
  * (automaticSignalingServer): the FreeRTC client prefers healthy local
  * relays, and falls back to the nearest public ones; `signal` names one
- * relay to start from instead.
+ * relay to start from instead. Relays carry signaling only: peer data goes
+ * over WebRTC between peers.
+ *
+ * Its storage is PeerPigeon's (encrypted sync, in IndexedDB in a browser,
+ * in memory in Node). This node replicates PigeonFS's holdings records (each
+ * peer's, in the user space: small) and keeps other PigeonFS records only
+ * when it asked for them (manifests, in the frozen space: a big file's runs
+ * to hundreds of kilobytes).
  */
-import { PeerPigeonNode } from 'peerpigeon';
-import type { Mesh } from './mesh.ts';
+import { PeerPigeonNode, type PeerPigeonKeyPair } from 'peerpigeon';
+import type { Mesh, MeshStorage, Space } from './mesh.ts';
+import { HOLDINGS_PREFIX } from './pigeonfs.ts';
 
 export interface JoinOptions {
   /** Peers must share the network and the room to find each other. */
@@ -17,13 +25,18 @@ export interface JoinOptions {
   maxPeers?: number;
   /** PeerPigeon chooses relays (FreeRTC: local first, then the nearest public ones); false: only `signal`. */
   automatic?: boolean;
+  /** This peer's key pair (its storage identity); a browser keeps its own, a Node peer passes the one it saved. */
+  keyPair?: PeerPigeonKeyPair;
+  /** IndexedDB name for the storage (browser). */
+  dbName?: string;
 }
 
-/** PigeonFS messages carry this tag (other users of the same node ignore them). */
-export const TAG = 'pfs';
+export interface PeerPigeonMesh extends Mesh {
+  keyPair(): PeerPigeonKeyPair | null;
+}
 
-export async function joinMesh(o: JoinOptions = {}): Promise<Mesh> {
-  const node = new PeerPigeonNode({
+export async function joinMesh(o: JoinOptions = {}): Promise<PeerPigeonMesh> {
+  const node: PeerPigeonNode = new PeerPigeonNode({
     networkId: o.network ?? 'pigeonfs',
     sessionId: o.room ?? 'main',
     automaticSignalingServer: o.automatic ?? true,
@@ -31,13 +44,30 @@ export async function joinMesh(o: JoinOptions = {}): Promise<Mesh> {
     ...(o.signal ? { signalingServer: o.signal } : {}),
     minPeers: o.minPeers ?? 2,
     maxPeers: o.maxPeers ?? 8,
-    crypto: {},
+    crypto: o.keyPair ? { keyPair: o.keyPair } : {},
+    storage: {
+      dbName: o.dbName ?? 'pigeonfs-storage',
+      // Holdings records replicate; anything else only when asked for (and requests always reach holders).
+      syncFilter: (_space, key, context) => context.kind === 'retrieve-request' || key.startsWith(HOLDINGS_PREFIX) || !!node.storage?.isSubscribed(_space, key),
+    },
   });
   await node.start();
   const self = node.getClientId();
   if (!self) throw new Error('the mesh node has no id');
+  const s = node.storage!;
+  const storage: MeshStorage = {
+    owner: node.crypto?.getKeyPair().epub ?? self,
+    get: async (space, key) => (await s.get(space, key))?.value ?? null,
+    retrieve: async (space, key, timeoutMs = 3000) => (await s.retrieve(space, key, { timeoutMs }))?.value ?? null,
+    put: async (space, key, value, options = {}) => { await s.put(space, key, value, options); },
+    list: async (space, prefix) => (await s.list(space)).filter((r) => r.key.startsWith(prefix))
+      .map((r) => ({ key: r.key, value: r.value, owner: r.ownerId, updatedAt: r.updatedAt })),
+    onChange: (listener) => s.on('change', (e) => listener(e.space as Space, e.key)),
+  };
   return {
     self,
+    storage,
+    keyPair: () => node.crypto?.getKeyPair() ?? null,
     peers: () => node.getConnectedPeers(),
     broadcast: (data) => { node.broadcast(data); },
     sendDirect: (peer, data) => node.sendDirect(peer, data) !== null,

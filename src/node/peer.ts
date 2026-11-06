@@ -14,6 +14,7 @@ import { watch } from 'node:fs';
 import { installWebRtc } from './webrtc.ts';
 import { fsStores } from './store-fs.ts';
 import { joinMesh } from '../core/peerpigeon.ts';
+import type { PeerPigeonKeyPair } from 'peerpigeon';
 import { PigeonFS } from '../core/pigeonfs.ts';
 
 const mkdirP = promisify(mkdir), readFileP = promisify(readFile), readdirP = promisify(readdir), statP = promisify(stat), writeFileP = promisify(writeFile);
@@ -36,8 +37,14 @@ async function main(): Promise<void> {
   await installWebRtc();
   const { chunks, library } = await fsStores(dir);
   console.log(`Joining the mesh (network ${arg('network') ?? 'pigeonfs'}, room ${arg('room') ?? 'main'})…`);
-  const mesh = await joinMesh({ network: arg('network'), room: arg('room'), signal: arg('signal') });
+  // Its key pair (its identity in the mesh's storage: its holdings record is its own), kept in --dir.
+  const keyFile = path.join(dir, 'keypair.json');
+  let keyPair: PeerPigeonKeyPair | undefined;
+  try { keyPair = JSON.parse(await readFileP(keyFile, 'utf8')) as PeerPigeonKeyPair; } catch { keyPair = undefined; }
+  const mesh = await joinMesh({ network: arg('network'), room: arg('room'), signal: arg('signal'), keyPair });
+  if (!keyPair && mesh.keyPair()) await writeFileP(keyFile, JSON.stringify(mesh.keyPair()), { mode: 0o600 });
   const fs = new PigeonFS(mesh, chunks, library);
+  await fs.start();
   console.log(`PigeonFS peer ${mesh.self.slice(0, 8)} is up${mesh.relay() ? ` (relay ${mesh.relay()})` : ''}; holding what is in ${dir}, sharing ${shareDir}.`);
 
   // Files in the shared folder: shared once each (again if changed), remembered by path, size and time.

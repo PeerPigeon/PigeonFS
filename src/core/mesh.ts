@@ -1,7 +1,8 @@
 /**
- * What PigeonFS needs from a mesh: who it is, who it is linked to, and
- * messages to everyone (gossip) or to one peer. A PeerPigeon node gives it
- * (peerpigeon.ts); tests use a mesh in memory (sim.ts).
+ * What PigeonFS needs from a mesh: who it is, who it is linked to, messages
+ * to everyone (gossip) or to one peer, and the mesh's storage spaces. A
+ * PeerPigeon node gives it (peerpigeon.ts); tests use a mesh in memory
+ * (sim.ts).
  */
 export interface Mesh {
   readonly self: string;
@@ -14,5 +15,38 @@ export interface Mesh {
   onPeersChanged(listener: () => void): void;
   /** The relay in use, for showing (empty if unknown). */
   relay(): string;
+  /** The mesh's storage (PeerPigeon's spaces), if it has one. */
+  readonly storage: MeshStorage | null;
   stop(): Promise<void>;
+}
+
+/**
+ * PeerPigeon's storage spaces, as PigeonFS uses them:
+ *  - public: anyone writes;
+ *  - user: the first writer owns a key, and only it can change it;
+ *  - frozen: written once, never changed (content-addressed records);
+ *  - private: this peer's alone, never sent.
+ */
+export type Space = 'public' | 'user' | 'frozen' | 'private';
+
+export interface StoredRecord {
+  key: string;
+  value: unknown;
+  /** Its owner (user space), or null. */
+  owner: string | null;
+  updatedAt: number;
+}
+
+export interface MeshStorage {
+  /** This peer's storage identity: what owns its user-space records. */
+  readonly owner: string;
+  /** A record as held here (null if not). */
+  get(space: Space, key: string): Promise<unknown | null>;
+  /** A record from here, or else from any peer holding it (null if none answers in time). */
+  retrieve(space: Space, key: string, timeoutMs?: number): Promise<unknown | null>;
+  /** silent: stored and served on request, but not announced to the room. */
+  put(space: Space, key: string, value: unknown, options?: { silent?: boolean }): Promise<void>;
+  /** The records held here in a space whose keys start with `prefix`. */
+  list(space: Space, prefix: string): Promise<StoredRecord[]>;
+  onChange(listener: (space: Space, key: string) => void): void;
 }

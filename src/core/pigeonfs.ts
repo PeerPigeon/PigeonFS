@@ -10,8 +10,16 @@
  *    none, is passed over); once whole, this peer holds it too, and says so.
  *  - offer: tell one peer about a file (it fetches it from here, or anyone).
  *
- * Every peer answers for what it holds: manifests ("man?") and chunks
- * ("chunk?"), by their hashes.
+ * Every peer answers for what it holds: chunks ("chunk?"), by their hashes.
+ *
+ * In the mesh's storage (PeerPigeon's spaces):
+ *  - frozen  pfs/m/<id>         each manifest, written once (its key is its
+ *                               hash): fetched from any peer holding it, and
+ *                               checked against the id;
+ *  - user    pfs/holds/<owner>  what each peer holds, and how much: only that
+ *                               peer can change it, and every peer replicates
+ *                               it, so holders are known without asking.
+ * Without storage (or when it has no answer) a holder is asked directly ("man?").
  */
 import { fromBase64, randomId, sha256Hex, toBase64 } from './bytes.ts';
 import { CHUNK_BYTES, fileId, isManifest, readSlice, sourceSize, summary, type FileSummary, type Manifest, type Source } from './manifest.ts';
@@ -20,6 +28,19 @@ import type { ChunkStore, Library, LibraryEntry } from './store.ts';
 
 /** PigeonFS messages carry this key (other users of the same mesh ignore them). */
 export const TAG = 'pfs';
+/** Storage keys: manifests (frozen), and each peer's holdings (user). */
+export const MANIFEST_PREFIX = 'pfs/m/';
+export const HOLDINGS_PREFIX = 'pfs/holds/';
+
+/** What a peer holds, as it says in its user-space record. */
+export interface Holdings {
+  /** Its mesh id now (to ask for chunks). */
+  peer: string;
+  files: FileSummary[];
+  /** Bytes it stores. */
+  bytes: number;
+  at: number;
+}
 
 export interface NetworkFile extends FileSummary {
   /** Peers that said they hold it whole. */
@@ -78,7 +99,93 @@ export class PigeonFS {
     this.chunkTimeoutMs = options.chunkTimeoutMs ?? 20_000;
     this.searchMs = options.searchMs ?? 1500;
     mesh.onMessage((from, data) => { void this.receive(from, data); });
-    mesh.onPeersChanged(() => this.emit('change'));
+    mesh.onPeersChanged(() => { this.sayOwnerSoon(); this.emit('change'); });
+    mesh.storage?.onChange((space, key) => { if (space === 'user' && key.startsWith(HOLDINGS_PREFIX)) this.emit('change'); });
+  }
+
+  /** Put what is held here into the mesh's storage: each file's manifest (if not there yet), and this peer's holdings. */
+  async start(): Promise<void> {
+    if (!this.mesh.storage) return;
+    for (const e of await this.library.list()) await this.keepManifest(e.id, e.manifest);
+    await this.publishHoldings();
+    this.sayOwner();
+    this.sayOwnerSoon();
+    const every = setInterval(() => this.sayOwner(), 30_000);
+    (every as { unref?: () => void }).unref?.();
+  }
+
+  /**
+   * Tell the mesh whose holdings record is this peer's (at start, and whenever a peer links): PeerPigeon
+   * catches a newcomer up only on records it already asked for, so peers say where theirs are, and a
+   * peer that hears of one it does not hold asks for it (and so keeps it current from then on).
+   */
+  private sayOwner(): void {
+    const storage = this.mesh.storage;
+    if (storage) this.mesh.broadcast(this.msg('owner', { owner: storage.owner }));
+  }
+
+  /** Again a moment after a link comes up (the first messages on a new link can be lost), and once more later. */
+  private ownerTimers: ReturnType<typeof setTimeout>[] = [];
+  private sayOwnerSoon(): void {
+    if (!this.mesh.storage) return;
+    for (const t of this.ownerTimers) clearTimeout(t);
+    this.ownerTimers = [1000, 5000].map((ms) => {
+      const t = setTimeout(() => this.sayOwner(), ms);
+      (t as { unref?: () => void }).unref?.();
+      return t;
+    });
+  }
+
+  private readonly asked = new Set<string>();
+  private readonly answered = new Map<string, number>();
+  private async learnOwner(owner: string): Promise<void> {
+    const storage = this.mesh.storage;
+    if (!storage || owner === storage.owner || this.asked.has(owner) || !/^[\w.\-~]{8,200}$/.test(owner)) return;
+    this.asked.add(owner);
+    const got = await storage.retrieve('user', HOLDINGS_PREFIX + owner, 4000).catch(() => null);
+    if (!got) this.asked.delete(owner);
+    else this.emit('change');
+  }
+
+  private publishing: ReturnType<typeof setTimeout> | null = null;
+  /** Say what is held here (soon: several changes in a row make one record). */
+  private holdingsChanged(): void {
+    if (!this.mesh.storage) return;
+    if (this.publishing) clearTimeout(this.publishing);
+    this.publishing = setTimeout(() => { this.publishing = null; void this.publishHoldings().catch(() => {}); }, 300);
+  }
+
+  async publishHoldings(): Promise<void> {
+    const storage = this.mesh.storage;
+    if (!storage) return;
+    const files = (await this.library.list()).map((e) => summary(e.id, e.manifest));
+    const value: Holdings = { peer: this.self, files, bytes: (await this.chunks.usage()).bytes, at: Date.now() };
+    await storage.put('user', HOLDINGS_PREFIX + storage.owner, value);
+  }
+
+  /** Every peer's holdings record held here (this one's too), by its owner. */
+  async holdings(): Promise<(Holdings & { owner: string })[]> {
+    const storage = this.mesh.storage;
+    if (!storage) return [];
+    const out: (Holdings & { owner: string })[] = [];
+    for (const r of await storage.list('user', HOLDINGS_PREFIX)) {
+      const h = r.value as Holdings;
+      const owner = r.key.slice(HOLDINGS_PREFIX.length);
+      // Only its owner's word counts.
+      if (r.owner && r.owner !== owner) continue;
+      if (!h || typeof h.peer !== 'string' || !Array.isArray(h.files)) continue;
+      out.push({ owner, peer: h.peer, files: h.files.filter(isSummary), bytes: Number(h.bytes) || 0, at: Number(h.at) || 0 });
+    }
+    return out;
+  }
+
+  /** The manifest in the frozen space (written once; a peer that already has it there leaves it). */
+  private async keepManifest(id: string, manifest: Manifest): Promise<void> {
+    const storage = this.mesh.storage;
+    if (!storage) return;
+    try {
+      if (!(await storage.get('frozen', MANIFEST_PREFIX + id))) await storage.put('frozen', MANIFEST_PREFIX + id, manifest, { silent: true });
+    } catch { /* written meanwhile by another peer's answer: the same manifest */ }
   }
 
   get self(): string { return this.mesh.self; }
@@ -108,6 +215,8 @@ export class PigeonFS {
     const manifest: Manifest = { v: 1, name, size, type, chunkBytes: CHUNK_BYTES, chunks: hashes };
     const entry: LibraryEntry = { id: await fileId(manifest), manifest, added: Date.now() };
     await this.library.put(entry);
+    await this.keepManifest(entry.id, manifest);
+    this.holdingsChanged();
     this.noteHolder(this.self, summary(entry.id, manifest));
     this.announce([summary(entry.id, manifest)]);
     this.emit('change');
@@ -145,9 +254,11 @@ export class PigeonFS {
     await this.library.delete(id);
     const known = this.network.get(id);
     if (known) known.holders = known.holders.filter((p) => p !== this.self);
+    this.mesh.broadcast(this.msg('gone', { ids: [id] }));
     const used = new Set<string>();
     for (const other of await this.library.list()) for (const h of other.manifest.chunks) used.add(h);
     for (const h of new Set(entry.manifest.chunks)) if (!used.has(h)) await this.chunks.delete(h);
+    this.holdingsChanged();
     this.emit('change');
   }
 
@@ -166,6 +277,14 @@ export class PigeonFS {
       }
     };
     for (const e of await this.library.list()) if (matches(query, e.manifest.name)) note(this.self, [summary(e.id, e.manifest)]);
+    // What the holdings records say (at once); live answers follow. A peer's own record outranks
+    // what was heard of it before: a file it no longer lists, it no longer holds.
+    for (const h of await this.holdings()) {
+      if (h.peer === this.self) continue;
+      const listed = new Set(h.files.map((f) => f.id));
+      for (const n of this.network.values()) if (n.holders.includes(h.peer) && !listed.has(n.id) && n.seen < h.at) n.holders = n.holders.filter((p) => p !== h.peer);
+      note(h.peer, h.files.filter((f) => matches(query, f.name)));
+    }
     this.waiting.set(r, { done: (from, m) => { if (m.t === 'found') note(from, m.files); return false; } });
     this.mesh.broadcast(this.msg('find', { r, q: query }));
     await sleep(ms);
@@ -179,6 +298,7 @@ export class PigeonFS {
     const held = await this.library.get(id);
     if (held) return held.manifest;
     const holders = new Set([...(o.holders ?? []), ...(this.network.get(id)?.holders ?? [])].filter((p) => p !== this.self));
+    for (const h of await this.holdings()) if (h.peer !== this.self && h.files.some((f) => f.id === id)) holders.add(h.peer);
     if (!holders.size) for (const p of await this.whoHolds(id)) holders.add(p);
     if (!holders.size) throw new Error('nobody on the mesh holds it now');
     const manifest = await this.manifestFrom([...holders], id);
@@ -232,6 +352,8 @@ export class PigeonFS {
     };
     await Promise.all(Array.from({ length: Math.min(this.concurrency, Math.max(1, todo.length)) }, (_, lane) => worker(lane)));
     await this.library.put({ id, manifest, added: Date.now() });
+    await this.keepManifest(id, manifest);
+    this.holdingsChanged();
     this.noteHolder(this.self, summary(id, manifest));
     this.announce([summary(id, manifest)]);
     this.emit('change');
@@ -276,7 +398,7 @@ export class PigeonFS {
   }
 
   private announce(files: FileSummary[]): void {
-    if (files.length) this.mesh.broadcast(this.msg('have', { files }));
+    if (files.length) this.mesh.broadcast(this.msg('have', { files, owner: this.mesh.storage?.owner }));
   }
 
   /** Ask one peer; its answer (with the same r), or null if none in time. */
@@ -296,6 +418,12 @@ export class PigeonFS {
   }
 
   private async manifestFrom(holders: string[], id: string): Promise<Manifest> {
+    // From the frozen space: here, or any peer holding the record.
+    const storage = this.mesh.storage;
+    if (storage) {
+      const m = await storage.retrieve('frozen', MANIFEST_PREFIX + id, 4000).catch(() => null);
+      if (isManifest(m) && (await fileId(m)) === id) return m;
+    }
     for (const peer of holders) {
       const answer = await this.ask(peer, 'man?', { id }, 8000);
       if (answer?.t === 'man' && isManifest(answer.m) && (await fileId(answer.m)) === id) return answer.m;
@@ -315,13 +443,32 @@ export class PigeonFS {
     const m = data as Message;
     if (!m || typeof m !== 'object' || m[TAG] !== 1 || typeof m.t !== 'string') return;
     // Answers to something this peer asked.
+    if (m.t === 'found' && typeof m.owner === 'string') void this.learnOwner(m.owner);
     if (typeof m.r === 'string' && this.waiting.has(m.r) && ['found', 'man', 'man-', 'chunk', 'chunk-'].includes(m.t)) {
       this.waiting.get(m.r)!.done(from, m);
       return;
     }
     switch (m.t) {
       case 'have':
+        if (typeof m.owner === 'string') void this.learnOwner(m.owner);
         for (const f of Array.isArray(m.files) ? m.files : []) if (isSummary(f)) this.noteHolder(from, f);
+        this.emit('change');
+        return;
+      case 'owner':
+        if (typeof m.owner === 'string') {
+          // A peer new to this one: tell it where this peer's record is too (once in a while, not back and forth).
+          if (!this.asked.has(m.owner) && this.mesh.storage && Date.now() - (this.answered.get(m.owner) ?? 0) > 30_000) {
+            this.answered.set(m.owner, Date.now());
+            this.mesh.sendDirect(from, this.msg('owner', { owner: this.mesh.storage.owner }));
+          }
+          await this.learnOwner(m.owner);
+        }
+        return;
+      case 'gone':
+        for (const id of Array.isArray(m.ids) ? m.ids : []) {
+          const known = typeof id === 'string' ? this.network.get(id) : undefined;
+          if (known) known.holders = known.holders.filter((p) => p !== from);
+        }
         this.emit('change');
         return;
       case 'find': {
@@ -330,7 +477,7 @@ export class PigeonFS {
           if (typeof m.id === 'string' ? e.id === m.id : matches(String(m.q ?? ''), e.manifest.name)) files.push(summary(e.id, e.manifest));
           if (files.length >= 200) break;
         }
-        if (files.length) this.mesh.sendDirect(from, this.msg('found', { r: m.r, files }));
+        if (files.length) this.mesh.sendDirect(from, this.msg('found', { r: m.r, files, owner: this.mesh.storage?.owner }));
         return;
       }
       case 'man?': {
