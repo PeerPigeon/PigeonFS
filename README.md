@@ -12,7 +12,8 @@ Files across a [PeerPigeon](https://github.com/PeerPigeon/PeerPigeon) mesh: shar
 
 ```bash
 npm install
-npm run dev          # https://localhost:5173 (a self-signed certificate: accept it once per device)
+npm run dev          # the page (https://localhost:5173; a self-signed certificate: accept it once per device) and a storage server, in one command
+npm run page         # the page alone
 npm run peer         # a peer that stays up, in Node
 ```
 
