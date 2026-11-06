@@ -9,11 +9,12 @@
     "build": "tsc --noEmit && vite build",
     "peer": "tsx src/node/peer.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --import tsx tests/*.test.ts"
+    "test": "node --test --import tsx tests/*.test.ts",
+    "server": "tsx src/node/server.ts"
   },
   "dependencies": {
     "@fontsource-variable/archivo": "^5.3.0",
-    "peerpigeon": "github:PeerPigeon/PeerPigeon#238f85f",
+    "peerpigeon": "github:PeerPigeon/PeerPigeon#7503de6",
     "werift": "0.24.4",
     "ws": "^8.21.3"
   },

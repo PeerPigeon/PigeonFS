@@ -26,6 +26,21 @@ npm run peer -- --dir pigeonfs-data --share ~/Shared
 
 It holds what it fetched or was given in `--dir` (chunks under `chunks/`, its files under `files/`), serves them to the mesh, and shares every file in the `--share` folder (default `<dir>/share`), including ones added while it runs. WebRTC in Node comes from werift.
 
+### A storage server
+
+```bash
+npm run server -- --dir pigeonfs-server
+```
+
+A server keeps PeerPigeon storage for any app and any room, the way a relay carries its signaling. Every PeerPigeon peer looks for servers and uses them when there are any; with none, storage works across the mesh as before.
+
+- **Found like relays.** A server announces the role `storage` in one scope (`peerpigeon-storage` / `servers`), and relays list it first. A peer dials only the servers it needs, over WebRTC, and the relays only signal.
+- **Kademlia placement.** A room's records live on the 3 servers whose ids are closest (XOR of SHA-256) to the room's id. When a server joins or leaves, they are handed to whichever servers are now closest.
+- **Moved, not copied.** When a room's servers come up, a peer sends them what it keeps and drops what it does not use (keys it subscribes to or replicates stay). It reads the rest back from them when asked. Writes go to the servers as they happen, and changes come back from them.
+- **Blind.** The room's id, each record's slot and its space are hashes of the room's secret, and each record is the room's own ciphertext. A write token from the same secret keeps anyone outside the room off a slot, and a frozen slot is never overwritten.
+
+It keeps records in `--dir`, one folder per room. File chunks on servers come next.
+
 ## How it works
 
 ### Greedy storage
@@ -70,7 +85,7 @@ src/core/manifest.ts    chunks, manifests and file ids
 src/core/peerpigeon.ts  the mesh: a PeerPigeon node
 src/core/sim.ts         a mesh in memory, for tests
 src/core/store*.ts      where chunks and files are kept
-src/node/               the Node peer (werift WebRTC, a folder store)
+src/node/               the Node peer (werift WebRTC, a folder store) and the storage server
 src/app/                the page
 legacy/                 PigeonFS 1.x
 ```
@@ -80,6 +95,7 @@ legacy/                 PigeonFS 1.x
 ```bash
 npm test                                   # the protocol on a simulated mesh, and the folder store
 node --import tsx tests/e2e-relay.mjs 8788 # two Node peers on PeerPigeon, through a FreeRTC relay on this machine
+node --import tsx tests/e2e-server.mjs 8788 # a storage server: read after the writer left, and records moved to a late server
 ```
 
 For the second, run a FreeRTC relay locally first, with federation off (`FREERTC_FEDERATION=off`), so no public relay is used.
