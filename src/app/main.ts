@@ -1,7 +1,11 @@
 /**
- * PigeonFS in a browser: share files, find and fetch them across the mesh,
- * and see what this browser holds. ?network= and ?room= pick the mesh.
+ * PigeonFS in a browser: find and fetch files across the mesh (left), share
+ * files and see what this browser holds and who it is linked to (right).
+ * ?network= and ?room= pick the mesh; ?signal=ws://… starts from that relay
+ * (with ?auto=0, only that one).
  */
+import '@fontsource-variable/archivo/wdth.css';
+import './style.css';
 import { joinMesh } from '../core/peerpigeon.ts';
 import { PigeonFS, type NetworkFile, type Offer } from '../core/pigeonfs.ts';
 import { idbStores } from '../core/store-idb.ts';
@@ -18,40 +22,49 @@ function size(n: number): string {
   return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
 }
 
-function item(name: string, detail: string, ...actions: HTMLElement[]): HTMLLIElement {
-  const li = document.createElement('li');
-  const text = document.createElement('div');
-  text.className = 'name';
-  const strong = document.createElement('strong');
-  strong.textContent = name;
-  strong.title = name;
-  const small = document.createElement('small');
-  small.textContent = detail;
-  text.append(strong, small);
-  li.append(text, ...actions);
-  return li;
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+function el<K extends keyof HTMLElementTagNameMap>(tag: K, props: Partial<HTMLElementTagNameMap[K]> = {}, ...children: (Node | string)[]): HTMLElementTagNameMap[K] {
+  const e = Object.assign(document.createElement(tag), props);
+  e.append(...children);
+  return e;
 }
 
-function button(label: string, onClick: () => void, quiet = false): HTMLButtonElement {
-  const b = document.createElement('button');
-  b.type = 'button';
-  b.textContent = label;
-  if (quiet) b.className = 'quiet';
+function button(label: string, onClick: () => void, quiet = false, title = ''): HTMLButtonElement {
+  const b = el('button', { type: 'button', textContent: label, className: quiet ? 'quiet' : '', title });
   b.addEventListener('click', onClick);
   return b;
+}
+
+/** A file row: its name, a line about it, its buttons, and (while fetching) a bar or (after a failure) why. */
+function row(name: string, detail: (Node | string)[], actions: HTMLElement[], progress?: number, error?: string): HTMLLIElement {
+  const li = el('li', {},
+    el('div', { className: 'name' }, el('b', { textContent: name, title: name }), el('small', {}, ...detail)),
+    el('span', { className: 'acts' }, ...actions));
+  if (progress !== undefined) { const bar = el('div', { className: 'bar' }, el('i')); (bar.firstChild as HTMLElement).style.width = `${Math.round(progress * 100)}%`; li.append(bar); }
+  if (error) li.append(el('p', { className: 'error', textContent: error }));
+  return li;
 }
 
 async function main(): Promise<void> {
   const network = query.get('network') ?? 'pigeonfs', room = query.get('room') ?? 'main';
   const { chunks, library } = await idbStores();
-  // ?signal=ws://… starts from that relay; with ?auto=0, only that one.
   const mesh = await joinMesh({ network, room, signal: query.get('signal') ?? undefined, automatic: query.get('auto') !== '0' });
   const fs = new PigeonFS(mesh, chunks, library);
   (globalThis as Record<string, unknown>).pigeonfs = fs;
+  $<HTMLButtonElement>('find-button').disabled = false;
+  $('s-self').textContent = mesh.self.slice(0, 12);
+  $('s-self').className = 'id';
+  $('s-self').title = mesh.self;
+  $('s-room').textContent = `${network} / ${room}`;
 
-  const status = () => {
-    const n = mesh.peers().length;
-    $('status').textContent = `${network} / ${room} · ${n ? `${n} peer${n === 1 ? '' : 's'} linked` : 'no peers linked yet'}${mesh.relay() ? ` · relay ${mesh.relay()}` : ''}`;
+  const renderMesh = () => {
+    const peers = mesh.peers();
+    $('status').textContent = peers.length ? `${plural(peers.length, 'peer')} linked` : 'Alone so far';
+    $('live-dot').hidden = !peers.length;
+    $('s-relay').textContent = mesh.relay() || '…';
+    $('s-relay').title = mesh.relay();
+    $('peers').replaceChildren(...peers.map((p) => el('li', {}, el('b', { textContent: p.slice(0, 12), title: p }), el('span', { textContent: 'linked' }))));
   };
 
   // Saving a held file: its chunks as a Blob, downloaded under its name.
@@ -59,17 +72,16 @@ async function main(): Promise<void> {
     const parts: BlobPart[] = [];
     for await (const p of fs.parts(id)) parts.push(p as Uint8Array<ArrayBuffer>);
     const url = URL.createObjectURL(new Blob(parts, { type: type || 'application/octet-stream' }));
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = name;
-    a.click();
+    el('a', { href: url, download: name }).click();
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
   };
 
   const fetching = new Map<string, number>();
+  const failed = new Map<string, string>();
   const fetchFile = async (f: { id: string; name: string; type: string }, holders?: string[]) => {
     if (fetching.has(f.id)) return;
     fetching.set(f.id, 0);
+    failed.delete(f.id);
     renderResults();
     try {
       await fs.fetch(f.id, { holders, onProgress: (p) => { fetching.set(f.id, p.size ? p.bytes / p.size : 1); renderResults(); } });
@@ -77,68 +89,84 @@ async function main(): Promise<void> {
       await save(f.id, f.name, f.type);
     } catch (e) {
       fetching.delete(f.id);
-      alert(`Could not fetch ${f.name}: ${(e as Error).message}`);
+      failed.set(f.id, `Could not fetch it: ${(e as Error).message}.`);
     }
     renderResults();
-    void renderMine();
   };
 
-  let results: NetworkFile[] = [];
+  let results: NetworkFile[] | null = null;
   const renderResults = () => {
-    const ul = $('results');
-    ul.replaceChildren(...results.map((f) => {
-      const share = fetching.get(f.id);
+    if (!results) return;
+    const list = results;
+    $('results').replaceChildren(...list.map((f) => {
       const here = f.holders.includes(fs.self);
-      const li = item(f.name, `${size(f.size)} · ${here ? 'here' : `${f.holders.length} holder${f.holders.length === 1 ? '' : 's'}`}`,
-        here ? button('Save', () => void save(f.id, f.name, f.type), true) : button(share !== undefined ? `${Math.round(share * 100)}%` : 'Fetch', () => void fetchFile(f)));
-      if (share !== undefined) (li.lastChild as HTMLButtonElement).disabled = true;
-      return li;
+      const share = fetching.get(f.id);
+      const others = f.holders.filter((p) => p !== fs.self).length;
+      const detail: (Node | string)[] = [`${size(f.size)} · `, here ? el('span', { className: 'here', textContent: 'held here' }) : plural(others, 'holder')];
+      if (here && others) detail.push(`, and ${plural(others, 'other')}`);
+      const act = here ? button('Save', () => void save(f.id, f.name, f.type))
+        : share !== undefined ? Object.assign(button(`${Math.round(share * 100)}%`, () => {}), { disabled: true })
+          : button('Fetch', () => void fetchFile(f));
+      return row(f.name, detail, [act], share, failed.get(f.id));
     }));
+    $('results-note').textContent = list.length ? '' : 'Nothing on the mesh has a name with all those words (peers answer for what they hold now).';
+    $('results-note').hidden = !list.length ? false : true;
   };
 
   const renderOffers = () => {
-    $('offers-section').hidden = !fs.offers.length;
-    $('offers').replaceChildren(...fs.offers.map((o: Offer) => item(o.file.name, `${size(o.file.size)} · from ${o.from.slice(0, 8)}`,
-      button('Fetch', () => { fs.dismissOffer(o); void fetchFile(o.file, [o.from]); }),
-      button('Dismiss', () => fs.dismissOffer(o), true))));
+    $('offers-block').hidden = !fs.offers.length;
+    $('offers').replaceChildren(...fs.offers.map((o: Offer) => row(o.file.name, [`${size(o.file.size)} · from ${o.from.slice(0, 8)}`], [
+      button('Fetch', () => { fs.dismissOffer(o); results = [...(results ?? []).filter((r) => r.id !== o.file.id), fs.network.get(o.file.id)!]; void fetchFile(o.file, [o.from]); }),
+      button('Dismiss', () => fs.dismissOffer(o), true),
+    ])));
   };
 
   const renderMine = async () => {
     const files = await fs.files();
     const u = await fs.usage();
-    $('usage').textContent = files.length ? `${files.length} file${files.length === 1 ? '' : 's'}, ${size(u.bytes)} in this browser` : 'Nothing held here yet.';
-    $('mine').replaceChildren(...files.map((e: LibraryEntry) => {
-      const offerTo = mesh.peers();
-      return item(e.manifest.name, `${size(e.manifest.size)} · ${new Date(e.added).toLocaleString()}`,
-        button('Save', () => void save(e.id, e.manifest.name, e.manifest.type), true),
-        ...(offerTo.length ? [button('Offer', () => { for (const p of offerTo) fs.offer(p, e); }, true)] : []),
-        button('Remove', () => void fs.remove(e.id), true));
-    }));
+    $('s-files').textContent = String(files.length);
+    $('s-bytes').textContent = size(u.bytes);
+    $('s-chunks').textContent = String(u.chunks);
+    const linked = mesh.peers();
+    $('mine').replaceChildren(...files.map((e: LibraryEntry) => row(e.manifest.name, [`${size(e.manifest.size)} · ${new Date(e.added).toLocaleDateString()}`], [
+      button('Save', () => void save(e.id, e.manifest.name, e.manifest.type), true),
+      ...(linked.length ? [button('Offer', () => { for (const p of mesh.peers()) fs.offer(p, e); }, true, `Tell the ${plural(linked.length, 'linked peer')} about it`)] : []),
+      button('Remove', () => void fs.remove(e.id), true, 'Stop holding it here'),
+    ])));
   };
 
   const share = async (files: FileList | File[]) => {
+    const bar = $('load-bar'), fill = $('load-bar-fill');
     for (const file of Array.from(files)) {
+      bar.hidden = false;
       $('sharing').textContent = `Sharing ${file.name}…`;
-      await fs.share(file, file.name, file.type, (done, total) => { $('sharing').textContent = `Sharing ${file.name}: ${Math.round((100 * done) / Math.max(1, total))}%`; });
+      await fs.share(file, file.name, file.type, (done, total) => { fill.style.width = `${Math.round((100 * done) / Math.max(1, total))}%`; });
     }
-    $('sharing').textContent = '';
+    bar.hidden = true;
+    fill.style.width = '0';
+    $('sharing').textContent = `Shared ${plural(files.length, 'file')}. They stay in this browser, and go to whoever on the mesh asks for them.`;
   };
 
-  $<HTMLInputElement>('pick').addEventListener('change', (e) => { const t = e.target as HTMLInputElement; if (t.files) void share(t.files); t.value = ''; });
+  $<HTMLInputElement>('pick').addEventListener('change', (e) => { const t = e.target as HTMLInputElement; if (t.files?.length) void share(t.files); t.value = ''; });
   addEventListener('dragover', (e) => { e.preventDefault(); document.body.classList.add('dragging'); });
-  addEventListener('dragleave', () => document.body.classList.remove('dragging'));
+  addEventListener('dragleave', (e) => { if (!e.relatedTarget) document.body.classList.remove('dragging'); });
   addEventListener('drop', (e) => { e.preventDefault(); document.body.classList.remove('dragging'); if (e.dataTransfer?.files.length) void share(e.dataTransfer.files); });
   $('find').addEventListener('submit', async (e) => {
     e.preventDefault();
+    const b = $<HTMLButtonElement>('find-button');
+    b.disabled = true;
+    b.textContent = 'Asking…';
     results = await fs.search($<HTMLInputElement>('query').value.trim());
+    b.disabled = false;
+    b.textContent = 'Find';
     renderResults();
   });
 
-  fs.on('change', () => { status(); renderOffers(); renderResults(); void renderMine(); });
-  status();
+  fs.on('change', () => { renderMesh(); renderOffers(); renderResults(); void renderMine(); });
+  renderMesh();
   renderOffers();
   await renderMine();
-  setInterval(status, 3000);
+  setInterval(renderMesh, 3000);
 }
 
 main().catch((e) => { $('status').textContent = `Could not start: ${(e as Error).message}`; console.error(e); });

@@ -6,7 +6,7 @@ Files across a [PeerPigeon](https://github.com/PeerPigeon/PeerPigeon) mesh: shar
 - **From everyone at once.** A fetch asks all the peers holding the file for its chunks, several at a time; once whole, the fetching peer holds it too and says so, and the next fetch has one more source.
 - **On PeerPigeon.** Relays are PeerPigeon's own choice: the FreeRTC client tries healthy local relays first and falls back to the nearest public ones. Messages are PeerPigeon gossip (to everyone) and direct messages (to one peer).
 
-> **2.0 is a rebuild.** The 1.x app (one large Vue component on PeerPigeon 1.0.6) is kept in [`legacy/`](legacy) for reference. The UI here is a plain working page; a proper UI comes next.
+> **2.0 is a rebuild.** The 1.x app (one large Vue component on PeerPigeon 1.0.6) is kept in [`legacy/`](legacy) for reference. The page looks like PigeonAI's: finding on the left; sharing, what this browser holds, and the mesh on the right.
 
 ## Use it
 

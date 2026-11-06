@@ -1,42 +1,66 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PigeonFS</title>
-  <link rel="stylesheet" href="./style.css" />
-</head>
-<body>
-  <header>
-    <h1>PigeonFS</h1>
-    <p id="status">Joining the mesh…</p>
-  </header>
-  <main>
-    <section id="drop">
-      <label class="share">
-        <input type="file" id="pick" multiple hidden />
-        <strong>Share files</strong>
-        <span>Choose them, or drop them anywhere on this page. They stay in this browser and go to whoever asks.</span>
-      </label>
-      <p id="sharing" class="note"></p>
-    </section>
-    <section>
-      <form id="find">
-        <input id="query" type="search" placeholder="Find files on the mesh (empty: everything)" autocomplete="off" />
-        <button type="submit">Find</button>
-      </form>
-      <ul id="results" class="files"></ul>
-    </section>
-    <section id="offers-section" hidden>
-      <h2>Offered to you</h2>
-      <ul id="offers" class="files"></ul>
-    </section>
-    <section>
-      <h2>Here</h2>
-      <p id="usage" class="note"></p>
-      <ul id="mine" class="files"></ul>
-    </section>
-  </main>
-  <script type="module" src="./main.ts"></script>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PigeonFS</title>
+    <meta name="description" content="Files across a PeerPigeon mesh: share them, find them, and fetch them from whoever holds them, each chunk checked by its hash." />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%23111518' stroke='%2356b09c' stroke-width='3'/%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <header class="top">
+      <div class="load-bar" id="load-bar" role="progressbar" aria-label="Sharing" aria-valuemin="0" aria-valuemax="100" hidden><i id="load-bar-fill"></i></div>
+      <span class="mark">Pigeon<span>FS</span></span>
+      <span class="status"><span class="live-dot" id="live-dot" hidden><i aria-hidden="true"></i></span><span id="status">Joining the mesh…</span></span>
+    </header>
+
+    <main class="layout">
+      <section class="find" aria-label="Find files on the mesh">
+        <label class="prompt-label" for="query">Find on the mesh</label>
+        <form class="search" id="find">
+          <input id="query" type="search" placeholder="Words in a file's name; empty for everything" spellcheck="false" autocomplete="off" />
+          <button id="find-button" class="primary" type="submit" disabled>Find</button>
+        </form>
+        <div id="offers-block" hidden>
+          <h2 class="prompt-label">Offered to you</h2>
+          <ul class="files" id="offers"></ul>
+        </div>
+        <ul class="files" id="results" aria-live="polite"></ul>
+        <p class="note" id="results-note">Every peer holding a file whose name has all your words answers. Fetching takes its chunks from all of them at once, each checked against its hash; once whole, it is held here too.</p>
+      </section>
+
+      <aside class="panel">
+        <section class="block">
+          <h2>Share</h2>
+          <label class="drop" id="drop">
+            <input type="file" id="pick" multiple hidden />
+            <b>Choose files</b> or drop them anywhere on this page
+          </label>
+          <p class="note" id="sharing">They stay in this browser, and go to whoever on the mesh asks for them.</p>
+        </section>
+
+        <section class="block">
+          <h2>Held here</h2>
+          <dl class="stats">
+            <dt>Files</dt><dd id="s-files">0</dd>
+            <dt>Stored</dt><dd id="s-bytes">0 B</dd>
+            <dt>Chunks</dt><dd id="s-chunks">0</dd>
+          </dl>
+          <ul class="files compact" id="mine"></ul>
+        </section>
+
+        <section class="block">
+          <h2>Mesh</h2>
+          <dl class="stats">
+            <dt>You</dt><dd id="s-self">…</dd>
+            <dt>Network</dt><dd id="s-room">…</dd>
+            <dt>Relay</dt><dd id="s-relay">…</dd>
+          </dl>
+          <ul class="peers" id="peers"></ul>
+          <p class="credit">PigeonFS on PeerPigeon. Relays are PeerPigeon's choice: local ones first.</p>
+        </section>
+      </aside>
+    </main>
+    <script type="module" src="./main.ts"></script>
+  </body>
 </html>
