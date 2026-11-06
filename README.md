@@ -41,9 +41,11 @@ It serves the page too (https, port 5173; `--no-page` to leave it out), so one c
 - **Signed.** Every change is signed with the writer's key pair, and peers take only signed changes. A user record's owner is its signer's key, and a server takes a user record only from its owner.
 - **Blind.** The room's id, each record's slot and its space are hashes of the room's secret, and each record is the room's own ciphertext. A write token from the same secret keeps anyone outside the room off a slot, and a frozen slot is never overwritten.
 
-It keeps records in `--dir`, one folder per room.
+It keeps records in `--dir`, one folder per room (`rooms/`), and file chunks under `blobs/`.
 
-**Where data goes.** A server or a Node peer keeps everything in one folder: `--dir`, or the `PIGEONFS_DIR` environment variable, or `pigeonfs-server` / `pigeonfs-data` in the current folder. `~` means your home folder. On a Mac, an external drive is `/Volumes/<drive name>/…`; if that drive is not mounted, it refuses to start rather than filling the startup disk. File chunks on servers come next.
+**Files outlive their peers.** A peer puts every file it holds on the servers too, chunk by chunk, each sealed with a key made from its own hash, so a server can't read it and the same chunk is kept once whoever adds it. Each chunk sits on the 3 servers closest to its address. The file is then listed in the room (public `pfs/files/<id>`). A search finds it there when no peer holding it is up, and a fetch takes its chunks from peers first, then the servers.
+
+**Where data goes.** A server or a Node peer keeps everything in one folder: `--dir`, or the `PIGEONFS_DIR` environment variable, or `pigeonfs-server` / `pigeonfs-data` in the current folder. `~` means your home folder. On a Mac, an external drive is `/Volumes/<drive name>/…`; if that drive is not mounted, it refuses to start rather than filling the startup disk.
 
 ## How it works
 
@@ -100,6 +102,7 @@ legacy/                 PigeonFS 1.x
 npm test                                   # the protocol on a simulated mesh, and the folder store
 node --import tsx tests/e2e-relay.mjs 8788 # two Node peers on PeerPigeon, through a FreeRTC relay on this machine
 node --import tsx tests/e2e-server.mjs 8788 # a storage server: read after the writer left, and records moved to a late server
+node --import tsx tests/e2e-server-files.mjs 8788 # a file fetched whole from a server after every peer holding it left
 ```
 
 For the second, run a FreeRTC relay locally first, with federation off (`FREERTC_FEDERATION=off`), so no public relay is used.
