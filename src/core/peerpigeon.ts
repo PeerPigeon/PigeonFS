@@ -56,7 +56,8 @@ export async function joinMesh(o: JoinOptions = {}): Promise<PeerPigeonMesh> {
   if (!self) throw new Error('the mesh node has no id');
   const s = node.storage!;
   const storage: MeshStorage = {
-    owner: node.crypto?.getKeyPair().epub ?? self,
+    // Who owns this node's user records: its signing key (records are signed).
+    owner: s.ownerIdentity(),
     get: async (space, key) => (await s.get(space, key))?.value ?? null,
     retrieve: async (space, key, timeoutMs = 3000) => (await s.retrieve(space, key, { timeoutMs }))?.value ?? null,
     put: async (space, key, value, options = {}) => { await s.put(space, key, value, options); },

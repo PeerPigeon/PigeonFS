@@ -37,6 +37,7 @@ A server keeps PeerPigeon storage for any app and any room, the way a relay carr
 - **Found like relays.** A server announces the role `storage` in one scope (`peerpigeon-storage` / `servers`), and relays list it first. A peer dials only the servers it needs, over WebRTC, and the relays only signal.
 - **Kademlia placement.** A room's records live on the 3 servers whose ids are closest (XOR of SHA-256) to the room's id. When a server joins or leaves, they are handed to whichever servers are now closest.
 - **Moved, not copied.** When a room's servers come up, a peer sends them what it keeps and drops what it does not use (keys it subscribes to or replicates stay). It reads the rest back from them when asked. Writes go to the servers as they happen, and changes come back from them.
+- **Signed.** Every change is signed with the writer's key pair, and peers take only signed changes. A user record's owner is its signer's key, and a server takes a user record only from its owner.
 - **Blind.** The room's id, each record's slot and its space are hashes of the room's secret, and each record is the room's own ciphertext. A write token from the same secret keeps anyone outside the room off a slot, and a frozen slot is never overwritten.
 
 It keeps records in `--dir`, one folder per room. File chunks on servers come next.
