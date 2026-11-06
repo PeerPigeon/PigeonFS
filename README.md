@@ -40,7 +40,9 @@ A server keeps PeerPigeon storage for any app and any room, the way a relay carr
 - **Signed.** Every change is signed with the writer's key pair, and peers take only signed changes. A user record's owner is its signer's key, and a server takes a user record only from its owner.
 - **Blind.** The room's id, each record's slot and its space are hashes of the room's secret, and each record is the room's own ciphertext. A write token from the same secret keeps anyone outside the room off a slot, and a frozen slot is never overwritten.
 
-It keeps records in `--dir`, one folder per room. File chunks on servers come next.
+It keeps records in `--dir`, one folder per room.
+
+**Where data goes.** A server or a Node peer keeps everything in one folder: `--dir`, or the `PIGEONFS_DIR` environment variable, or `pigeonfs-server` / `pigeonfs-data` in the current folder. `~` means your home folder. On a Mac, an external drive is `/Volumes/<drive name>/…`; if that drive is not mounted, it refuses to start rather than filling the startup disk. File chunks on servers come next.
 
 ## How it works
 

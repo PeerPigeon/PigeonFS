@@ -15,6 +15,7 @@ import { promisify } from 'node:util';
 import path from 'node:path';
 import { watch } from 'node:fs';
 import { installWebRtc } from './webrtc.ts';
+import { dataDir } from './where.ts';
 import { fsStores } from './store-fs.ts';
 import { joinMesh } from '../core/peerpigeon.ts';
 import type { PeerPigeonKeyPair } from 'peerpigeon';
@@ -35,7 +36,7 @@ const MIME: Record<string, string> = {
 };
 
 async function main(): Promise<void> {
-  const dir = path.resolve(arg('dir') ?? 'pigeonfs-data');
+  const dir = dataDir(arg('dir'), 'pigeonfs-data');
   const shareDir = path.resolve(arg('share') ?? path.join(dir, 'share'));
   await mkdirP(shareDir, { recursive: true });
   await installWebRtc();

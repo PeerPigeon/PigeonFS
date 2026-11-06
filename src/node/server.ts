@@ -13,6 +13,7 @@ import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { PeerPigeonNode, type ServerRecord, type ServerRecordStore } from 'peerpigeon';
 import { installWebRtc } from './webrtc.ts';
+import { dataDir } from './where.ts';
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -57,7 +58,7 @@ export async function fsRecordStore(dir: string): Promise<ServerRecordStore> {
 }
 
 async function main(): Promise<void> {
-  const dir = path.resolve(arg('dir') ?? 'pigeonfs-server');
+  const dir = dataDir(arg('dir'), 'pigeonfs-server');
   await installWebRtc();
   const signal = arg('signal');
   const server = PeerPigeonNode.storageServer(signal ? { signalingServer: signal, automaticSignalingServer: false } : {}, await fsRecordStore(dir));
