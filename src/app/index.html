@@ -36,7 +36,8 @@
             <input type="file" id="pick" multiple hidden />
             <b>Choose files</b> or drop them anywhere on this page
           </label>
-          <p class="note" id="sharing">They stay in this browser, and go to whoever on the mesh asks for them.</p>
+          <p class="note" id="sharing">They stay in this browser, and go to whoever on the mesh asks for them, and to the storage servers when there are any.</p>
+          <p class="note" id="server-doing"></p>
         </section>
 
         <section class="block">
@@ -69,6 +70,7 @@
             <dt>You</dt><dd id="s-self">…</dd>
             <dt>Network</dt><dd id="s-room">…</dd>
             <dt>Relay</dt><dd id="s-relay">…</dd>
+            <dt>Storage servers</dt><dd id="s-servers">…</dd>
           </dl>
           <ul class="peers" id="peers"></ul>
           <p class="credit">PigeonFS on PeerPigeon. Relays are PeerPigeon's choice: local ones first.</p>

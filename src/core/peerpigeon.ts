@@ -65,9 +65,16 @@ export async function joinMesh(o: JoinOptions = {}): Promise<PeerPigeonMesh> {
       .map((r) => ({ key: r.key, value: r.value, owner: r.ownerId, updatedAt: r.updatedAt })),
     onChange: (listener) => s.on('change', (e) => listener(e.space as Space, e.key)),
   };
+  const link = node.storageServers;
   return {
     self,
     storage,
+    servers: link ? {
+      available: () => link.hasServers(),
+      count: () => s.serverCount(),
+      put: (bytes) => link.putBlob(bytes),
+      get: (hash) => link.getBlob(hash),
+    } : null,
     keyPair: () => node.crypto?.getKeyPair() ?? null,
     peers: () => node.getConnectedPeers(),
     broadcast: (data) => { node.broadcast(data); },

@@ -93,6 +93,9 @@ async function main(): Promise<void> {
     $('status').textContent = peers.length ? `${plural(peers.length, 'peer')} linked` : 'Alone so far';
     $('live-dot').hidden = !peers.length;
     $('s-relay').textContent = mesh.relay() || '…';
+    const servers = mesh.servers?.count() ?? 0;
+    $('s-servers').textContent = mesh.servers ? (servers ? `${servers} linked` : 'none found yet') : 'off';
+    $('server-doing').textContent = fs.serverStatus;
     $('s-relay').title = mesh.relay();
     // What each linked peer holds, from its holdings record (user space).
     const held = new Map((await fs.holdings()).map((h) => [h.peer, h]));
@@ -139,6 +142,7 @@ async function main(): Promise<void> {
       const others = f.holders.filter((p) => p !== fs.self).length;
       const detail: (Node | string)[] = [`${size(f.size)} · `, here ? el('span', { className: 'here', textContent: 'held here' }) : plural(others, 'holder')];
       if (here && others) detail.push(`, and ${plural(others, 'other')}`);
+      if (f.onServers) detail.push(' · ', el('span', { className: 'here', textContent: 'on the servers' }));
       const act = here ? button('Save', () => void save(f.id, f.name, f.type))
         : share !== undefined ? Object.assign(button(`${Math.round(share * 100)}%`, () => {}), { disabled: true })
           : button('Fetch', () => void fetchFile(f));
@@ -197,7 +201,7 @@ async function main(): Promise<void> {
     renderResults();
   });
 
-  fs.on('change', () => { void renderMesh(); renderOffers(); renderResults(); void renderMine(); });
+  fs.on('change', () => { $('server-doing').textContent = fs.serverStatus; void renderMesh(); renderOffers(); renderResults(); void renderMine(); });
   void renderMesh();
   renderOffers();
   await renderMine();

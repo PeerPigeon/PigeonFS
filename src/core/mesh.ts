@@ -17,6 +17,8 @@ export interface Mesh {
   relay(): string;
   /** The mesh's storage (PeerPigeon's spaces), if it has one. */
   readonly storage: MeshStorage | null;
+  /** Storage servers (content kept by its hash, sealed), if this mesh uses them. */
+  readonly servers?: MeshServers | null;
   stop(): Promise<void>;
 }
 
@@ -49,4 +51,16 @@ export interface MeshStorage {
   /** The records held here in a space whose keys start with `prefix`. */
   list(space: Space, prefix: string): Promise<StoredRecord[]>;
   onChange(listener: (space: Space, key: string) => void): void;
+}
+
+/** Storage servers: content kept by its SHA-256, there when every peer is gone. */
+export interface MeshServers {
+  /** Whether any server is known now. */
+  available(): Promise<boolean>;
+  /** How many linked servers keep this room's records now. */
+  count(): number;
+  /** Keeps content (at most 160 KB) on the servers; how many took it. */
+  put(bytes: Uint8Array): Promise<number>;
+  /** Content by its SHA-256, checked; null if no server has it. */
+  get(hash: string): Promise<Uint8Array | null>;
 }

@@ -33,6 +33,10 @@ export const TAG = 'pfs';
 /** Storage keys: manifests (frozen), and each peer's holdings (user). */
 export const MANIFEST_PREFIX = 'pfs/m/';
 export const HOLDINGS_PREFIX = 'pfs/holds/';
+/** Files kept on the storage servers (public): there to find and fetch when no peer holding them is up. */
+export const SERVER_FILES_PREFIX = 'pfs/files/';
+/** Which files this peer has put on the servers whole (private). */
+const ON_SERVERS_PREFIX = 'pfs/on-servers/';
 
 /** What a peer holds, as it says in its user-space record. */
 export interface Holdings {
@@ -53,6 +57,8 @@ export interface Holdings {
 export interface NetworkFile extends FileSummary {
   /** Peers that said they hold it whole. */
   holders: string[];
+  /** Kept whole on the storage servers too. */
+  onServers?: boolean;
   /** When it was last heard of. */
   seen: number;
 }
@@ -120,6 +126,61 @@ export class PigeonFS {
     if (!this.mesh.storage) return;
     for (const e of await this.library.list()) await this.keepManifest(e.id, e.manifest);
     await this.publishHoldings();
+    if (this.mesh.servers) {
+      // What is held here goes to the storage servers too, whenever there are any.
+      const look = () => void this.toServers().catch(() => {});
+      look();
+      this.serverTimer = setInterval(look, 15_000);
+      (this.serverTimer as { unref?: () => void }).unref?.();
+    }
+  }
+
+  private serverTimer: ReturnType<typeof setInterval> | null = null;
+  private sending: Promise<void> | null = null;
+  /** What putting files on the servers is doing now, for showing. */
+  serverStatus = '';
+
+  /**
+   * Puts every file held here on the storage servers, chunk by chunk (each
+   * sealed by its hash), then lists it there (public `pfs/files/<id>`), so it
+   * is found and fetched when no peer holding it is up.
+   */
+  toServers(): Promise<void> {
+    return (this.sending ??= (async () => {
+      const servers = this.mesh.servers, storage = this.mesh.storage;
+      if (!servers || !storage || !(await servers.available())) return;
+      for (const e of await this.library.list()) {
+        if (await storage.get('private', ON_SERVERS_PREFIX + e.id)) continue;
+        const hashes = [...new Set(e.manifest.chunks)];
+        let next = 0, done = 0, failed = false;
+        const lane = async () => {
+          while (next < hashes.length && !failed) {
+            const hash = hashes[next++];
+            const bytes = await this.chunks.get(hash);
+            if (!bytes || (await servers.put(bytes)) < 1) { failed = true; return; }
+            done++;
+            this.serverStatus = `Putting ${e.manifest.name} on the servers: ${Math.round((100 * done) / hashes.length)}%`;
+            this.emit('change');
+          }
+        };
+        await Promise.all([lane(), lane(), lane()]);
+        if (failed) { this.serverStatus = `Could not put ${e.manifest.name} on the servers yet; trying again soon.`; this.emit('change'); return; }
+        await this.keepManifest(e.id, e.manifest);
+        await storage.put('public', SERVER_FILES_PREFIX + e.id, { ...summary(e.id, e.manifest), at: Date.now() });
+        await storage.put('private', ON_SERVERS_PREFIX + e.id, { at: Date.now() });
+        const known = this.network.get(e.id);
+        if (known) known.onServers = true;
+      }
+      this.serverStatus = '';
+      this.emit('change');
+    })().finally(() => { this.sending = null; }));
+  }
+
+  /** The files listed as kept on the servers (whose names hold every word of `query`). */
+  async onServers(query = ''): Promise<FileSummary[]> {
+    const storage = this.mesh.storage;
+    if (!storage || !this.mesh.servers) return [];
+    return (await storage.list('public', SERVER_FILES_PREFIX)).map((r) => r.value).filter(isSummary).filter((f) => matches(query, f.name));
   }
 
   private publishing: ReturnType<typeof setTimeout> | null = null;
@@ -212,6 +273,7 @@ export class PigeonFS {
     this.noteHolder(this.self, summary(entry.id, manifest));
     this.announce([summary(entry.id, manifest)]);
     this.emit('change');
+    void this.toServers().catch(() => {});
     return entry;
   }
 
@@ -277,6 +339,13 @@ export class PigeonFS {
       for (const n of this.network.values()) if (n.holders.includes(h.peer) && !listed.has(n.id) && n.seen < h.at) n.holders = n.holders.filter((p) => p !== h.peer);
       note(h.peer, h.files.filter((f) => matches(query, f.name)));
     }
+    // Files kept on the storage servers: found even when no peer holding them is up.
+    for (const f of await this.onServers(query).catch(() => [] as FileSummary[])) {
+      const n = this.network.get(f.id) ?? { ...f, holders: [], seen: Date.now() };
+      n.onServers = true;
+      this.network.set(f.id, n);
+      found.set(f.id, n);
+    }
     this.waiting.set(r, { done: (from, m) => { if (m.t === 'found') note(from, m.files); return false; } });
     this.mesh.broadcast(this.msg('find', { r, q: query }));
     await sleep(ms);
@@ -296,7 +365,8 @@ export class PigeonFS {
     const holders = new Set([...(o.holders ?? []), ...(this.network.get(id)?.holders ?? [])].filter((p) => p !== this.self));
     for (const h of await this.holdings()) if (h.peer !== this.self && h.files.some((f) => f.id === id)) holders.add(h.peer);
     if (!holders.size) for (const p of await this.whoHolds(id)) holders.add(p);
-    if (!holders.size) throw new Error('nobody on the mesh holds it now');
+    const servers = this.mesh.servers && (await this.mesh.servers.available()) ? this.mesh.servers : null;
+    if (!holders.size && !servers) throw new Error('nobody on the mesh holds it now');
     const manifest = await this.manifestFrom([...holders], id);
     const name = manifest.name;
     const failures = new Map<string, number>();
@@ -329,6 +399,12 @@ export class PigeonFS {
               if ((await sha256Hex(data)) === hash) { got = data; from.add(peer); failures.set(peer, 0); break; }
             }
             failures.set(peer, (failures.get(peer) ?? 0) + 1);
+          }
+          // No peer sent it: the storage servers, if there are any.
+          if (!got && servers) {
+            o.signal?.throwIfAborted();
+            got = await servers.get(hash).catch(() => null);
+            if (got) from.add('servers');
           }
           if (got) {
             await this.chunks.put(hash, got);
@@ -424,7 +500,7 @@ export class PigeonFS {
       const answer = await this.ask(peer, 'man?', { id }, 8000);
       if (answer?.t === 'man' && isManifest(answer.m) && (await fileId(answer.m)) === id) return answer.m;
     }
-    throw new Error('no holder sent its manifest');
+    throw new Error(holders.length ? 'no holder sent its manifest' : 'nobody on the mesh or the servers has its manifest');
   }
 
   private noteHolder(peer: string, f: FileSummary): void {

@@ -9,9 +9,9 @@
  * It serves the PigeonFS page as well (https, port 5173), unless --no-page.
  *
  * It never sees a room, a key or a value: each record is the room's own
- * ciphertext under a hashed slot. Records are kept in --dir, one folder per room.
+ * ciphertext under a hashed slot. Records are kept in --dir, one folder per room (rooms/), and file chunks, sealed, under blobs/.
  */
-import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { PeerPigeonNode, type ServerRecord, type ServerRecordStore } from 'peerpigeon';
 import { installWebRtc } from './webrtc.ts';
@@ -32,6 +32,14 @@ export async function fsRecordStore(dir: string): Promise<ServerRecordStore> {
   const roomsDir = path.join(dir, 'rooms');
   await mkdir(roomsDir, { recursive: true });
   const index = new Map<string, Map<string, ServerRecord>>();
+  const blobsDir = path.join(dir, 'blobs');
+  await mkdir(blobsDir, { recursive: true });
+  const blobSizes = new Map<string, number>();
+  for (const sub of await readdir(blobsDir).catch(() => [] as string[])) {
+    for (const name of await readdir(path.join(blobsDir, sub)).catch(() => [] as string[])) {
+      if (HEX.test(name)) blobSizes.set(name, (await stat(path.join(blobsDir, sub, name)).catch(() => null))?.size ?? 0);
+    }
+  }
   for (const room of await readdir(roomsDir).catch(() => [] as string[])) {
     if (!HEX.test(room)) continue;
     const m = new Map<string, ServerRecord>();
@@ -56,6 +64,23 @@ export async function fsRecordStore(dir: string): Promise<ServerRecordStore> {
     },
     async list(room, tag) { return [...(index.get(room)?.values() ?? [])].filter((r) => !tag || r.tag === tag); },
     async rooms() { return [...index.keys()]; },
+    // Blobs (file chunks, model parts), sealed: <dir>/blobs/<first two of the address>/<address>.
+    async getBlob(address) {
+      if (!HEX.test(address)) return null;
+      try { return new Uint8Array(await readFile(path.join(blobsDir, address.slice(0, 2), address))); } catch { return null; }
+    },
+    async putBlob(address, sealed) {
+      if (!HEX.test(address)) throw new Error('bad address');
+      if (blobSizes.has(address)) return;
+      const folder = path.join(blobsDir, address.slice(0, 2));
+      await mkdir(folder, { recursive: true });
+      const file = path.join(folder, address), tmp = `${file}.${process.pid}.tmp`;
+      await writeFile(tmp, sealed);
+      await rename(tmp, file);
+      blobSizes.set(address, sealed.length);
+    },
+    async blobs() { return [...blobSizes.keys()]; },
+    async blobUsage() { let bytes = 0; for (const n of blobSizes.values()) bytes += n; return { count: blobSizes.size, bytes }; },
   };
 }
 
@@ -81,7 +106,7 @@ async function main(): Promise<void> {
   let last = '';
   setInterval(async () => {
     const s = await server.stats();
-    const line = `${s.rooms} room${s.rooms === 1 ? '' : 's'}, ${s.records} record${s.records === 1 ? '' : 's'}; linked to ${s.servers} server${s.servers === 1 ? '' : 's'} and ${s.clients} peer${s.clients === 1 ? '' : 's'}`;
+    const line = `${s.rooms} room${s.rooms === 1 ? '' : 's'}, ${s.records} record${s.records === 1 ? '' : 's'}, ${s.blobs} chunk${s.blobs === 1 ? '' : 's'} (${(s.blobBytes / 1e6).toFixed(1)} MB); linked to ${s.servers} server${s.servers === 1 ? '' : 's'} and ${s.clients} peer${s.clients === 1 ? '' : 's'}`;
     if (line !== last) { console.log(line); last = line; }
   }, 3000).unref();
   const stop = async () => { console.log('Stopping…'); await server.close(); process.exit(0); };
