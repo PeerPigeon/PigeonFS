@@ -19,6 +19,8 @@ export interface LibraryEntry {
   manifest: Manifest;
   /** When this peer came to hold it whole (ms since 1970). */
   added: number;
+  /** Held for the mesh (greedy storage): counts against the lent space, and is given back when not needed. */
+  forMesh?: boolean;
 }
 
 export interface Library {

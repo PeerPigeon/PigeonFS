@@ -28,6 +28,16 @@ It holds what it fetched or was given in `--dir` (chunks under `chunks/`, its fi
 
 ## How it works
 
+### Greedy storage
+
+Each peer lends the mesh space, up to a quota (in the page: **Lend space**, 1 GB by default, kept in the `private` space; a Node peer: `--quota`, 10 GB by default), and fills it with copies of files the mesh holds too few of.
+
+- **Three live copies of every file.** A holder is live while its holdings record is fresh: it says so again every 2 minutes, and a record older than 6 minutes is a peer gone.
+- **Who takes a file short of copies:** the lending peers with room for it, in an order fixed for that file (SHA-256 of its id and each peer's owner), the first as many as are missing. Every peer works this out from the same records, so they do not all fetch it at once; a peer says it is taking a copy before it starts (`taking` in its record), and decides only once it has heard from every peer it is linked to.
+- **Who gives one back:** of a file with more live copies than it needs, the peers holding it for the mesh that come last in its order. A peer also gives back (largest first) whatever no longer fits: its quota lowered, or its device short of free space (a browser: what the browser still allows the site; a Node peer: the disk, leaving 2 GB or a tenth of what is free).
+- **Your own files** (shared, or fetched for yourself) never count against the quota and are never given back; fetching a file held for the mesh makes it yours.
+- **Cost:** one file at a time, two chunks at once.
+
 ### PeerPigeon's storage spaces
 
 | Space | Key | What |

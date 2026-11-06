@@ -3,11 +3,14 @@
  * it to the mesh, and shares every file in a folder (and new ones as they
  * appear there).
  *
- *   npm run peer -- [--dir pigeonfs-data] [--share <folder>] [--network pigeonfs] [--room main] [--signal ws://…]
+ *   npm run peer -- [--dir pigeonfs-data] [--share <folder>] [--quota 10] [--network pigeonfs] [--room main] [--signal ws://…]
+ *
+ * It also lends the mesh up to --quota GB (default 10; 0: none) for copies of files the mesh holds
+ * too few of (greedy storage), leaving the disk some free space.
  *
  * Its chunks and library are kept in --dir; the shared folder defaults to <dir>/share.
  */
-import { mkdir, readFile, readdir, stat, writeFile, openAsBlob } from 'node:fs';
+import { mkdir, readFile, readdir, stat, statfs, writeFile, openAsBlob } from 'node:fs';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import { watch } from 'node:fs';
@@ -16,8 +19,9 @@ import { fsStores } from './store-fs.ts';
 import { joinMesh } from '../core/peerpigeon.ts';
 import type { PeerPigeonKeyPair } from 'peerpigeon';
 import { PigeonFS } from '../core/pigeonfs.ts';
+import { Greedy } from '../core/greedy.ts';
 
-const mkdirP = promisify(mkdir), readFileP = promisify(readFile), readdirP = promisify(readdir), statP = promisify(stat), writeFileP = promisify(writeFile);
+const statfsP = promisify(statfs), mkdirP = promisify(mkdir), readFileP = promisify(readFile), readdirP = promisify(readdir), statP = promisify(stat), writeFileP = promisify(writeFile);
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -45,6 +49,15 @@ async function main(): Promise<void> {
   if (!keyPair && mesh.keyPair()) await writeFileP(keyFile, JSON.stringify(mesh.keyPair()), { mode: 0o600 });
   const fs = new PigeonFS(mesh, chunks, library);
   await fs.start();
+  // Greedy storage: lend the mesh up to --quota GB (default 10; 0 for none), less while the disk is short.
+  const quotaGB = Number(arg('quota') ?? 10);
+  const greedy = new Greedy(fs, {
+    quota: Math.max(0, quotaGB) * 2 ** 30,
+    freeSpace: async () => { const s = await statfsP(dir); return s.bavail * s.bsize; },
+  });
+  greedy.start();
+  let lastDoing = '';
+  setInterval(() => { const d = greedy.status().doing; if (d !== lastDoing) { console.log(d); lastDoing = d; } }, 5000).unref();
   console.log(`PigeonFS peer ${mesh.self.slice(0, 8)} is up${mesh.relay() ? ` (relay ${mesh.relay()})` : ''}; holding what is in ${dir}, sharing ${shareDir}.`);
 
   // Files in the shared folder: shared once each (again if changed), remembered by path, size and time.

@@ -120,6 +120,10 @@ body.dragging .drop { border-color: var(--sheen); color: var(--bone); }
 .peers li { display: flex; justify-content: space-between; gap: 8px; padding: 3px 0; border-top: 1px solid var(--line); }
 .peers li b { color: var(--bone); font-weight: 500; font-family: var(--mono); }
 .credit { color: var(--bone-3); font-size: 0.78rem; margin-top: 16px; }
+.quota { display: grid; grid-template-columns: 1fr 150px 4.5em; align-items: center; gap: 8px; color: var(--bone-2); font-size: 0.9rem; margin-bottom: 8px; }
+.quota input[type=range] { width: 100%; accent-color: var(--sheen); }
+.quota output { text-align: right; font-variant-numeric: tabular-nums; color: var(--bone); }
+.files .name small .lent { color: var(--warm); }
 
 @media (max-width: 860px) {
   .layout { grid-template-columns: 1fr; height: auto; }

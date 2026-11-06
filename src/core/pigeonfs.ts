@@ -38,10 +38,16 @@ export const HOLDINGS_PREFIX = 'pfs/holds/';
 export interface Holdings {
   /** Its mesh id now (to ask for chunks). */
   peer: string;
-  files: FileSummary[];
+  /** Its files; `mesh: true` on those it holds for the mesh (greedy storage). */
+  files: (FileSummary & { mesh?: boolean })[];
   /** Bytes it stores. */
   bytes: number;
+  /** When it said so (it says so again every few minutes while up: an old record is a peer gone). */
   at: number;
+  /** Space it lends the mesh, and how much of it is used (greedy storage), if it lends any. */
+  lends?: { quota: number; used: number };
+  /** Files it is taking a copy of for the mesh right now (counted as copies on their way). */
+  taking?: string[];
 }
 
 export interface NetworkFile extends FileSummary {
@@ -72,6 +78,10 @@ export interface FetchOptions {
   holders?: string[];
   onProgress?: (p: Progress) => void;
   signal?: AbortSignal;
+  /** Held for the mesh (greedy storage), not asked for here. */
+  forMesh?: boolean;
+  /** Chunks asked for at once (default: the PigeonFS's). */
+  concurrency?: number;
 }
 
 export interface PigeonFsOptions {
@@ -120,11 +130,24 @@ export class PigeonFS {
     this.publishing = setTimeout(() => { this.publishing = null; void this.publishHoldings().catch(() => {}); }, 300);
   }
 
+  /** Files this peer is taking a copy of for the mesh (greedy storage), said in its holdings record. */
+  readonly taking = new Set<string>();
+
+  /** What this peer lends the mesh (set by greedy storage), said in its holdings record. */
+  lending: (() => { quota: number; used: number } | null) | null = null;
+
+  /** Say what is held here again, now (a heartbeat, or a change made by greedy storage). */
+  holdingsNow(): void { void this.publishHoldings().catch(() => {}); }
+
   async publishHoldings(): Promise<void> {
     const storage = this.mesh.storage;
     if (!storage) return;
-    const files = (await this.library.list()).map((e) => summary(e.id, e.manifest));
-    const value: Holdings = { peer: this.self, files, bytes: (await this.chunks.usage()).bytes, at: Date.now() };
+    const files = (await this.library.list()).map((e) => ({ ...summary(e.id, e.manifest), ...(e.forMesh ? { mesh: true } : {}) }));
+    const lends = this.lending?.();
+    const value: Holdings = {
+      peer: this.self, files, bytes: (await this.chunks.usage()).bytes, at: Date.now(),
+      ...(lends ? { lends } : {}), ...(this.taking.size ? { taking: [...this.taking] } : {}),
+    };
     await storage.put('user', HOLDINGS_PREFIX + storage.owner, value);
   }
 
@@ -139,7 +162,11 @@ export class PigeonFS {
       // Only its owner's word counts.
       if (r.owner && r.owner !== owner) continue;
       if (!h || typeof h.peer !== 'string' || !Array.isArray(h.files)) continue;
-      out.push({ owner, peer: h.peer, files: h.files.filter(isSummary), bytes: Number(h.bytes) || 0, at: Number(h.at) || 0 });
+      out.push({
+        owner, peer: h.peer, files: h.files.filter(isSummary), bytes: Number(h.bytes) || 0, at: Number(h.at) || 0,
+        ...(h.lends && Number.isFinite(h.lends.quota) ? { lends: { quota: Number(h.lends.quota), used: Number(h.lends.used) || 0 } } : {}),
+        ...(Array.isArray(h.taking) ? { taking: h.taking.filter((x): x is string => typeof x === 'string') } : {}),
+      });
     }
     return out;
   }
@@ -261,7 +288,11 @@ export class PigeonFS {
   /** Fetch a file whole from the peers holding it; then it is held here too. */
   async fetch(id: string, o: FetchOptions = {}): Promise<Manifest> {
     const held = await this.library.get(id);
-    if (held) return held.manifest;
+    if (held) {
+      // Asked for here, of a file held for the mesh: it is this peer's own now (never given back).
+      if (held.forMesh && !o.forMesh) { await this.library.put({ ...held, forMesh: false }); this.holdingsChanged(); this.emit('change'); }
+      return held.manifest;
+    }
     const holders = new Set([...(o.holders ?? []), ...(this.network.get(id)?.holders ?? [])].filter((p) => p !== this.self));
     for (const h of await this.holdings()) if (h.peer !== this.self && h.files.some((f) => f.id === id)) holders.add(h.peer);
     if (!holders.size) for (const p of await this.whoHolds(id)) holders.add(p);
@@ -315,8 +346,8 @@ export class PigeonFS {
         }
       }
     };
-    await Promise.all(Array.from({ length: Math.min(this.concurrency, Math.max(1, todo.length)) }, (_, lane) => worker(lane)));
-    await this.library.put({ id, manifest, added: Date.now() });
+    await Promise.all(Array.from({ length: Math.min(o.concurrency ?? this.concurrency, Math.max(1, todo.length)) }, (_, lane) => worker(lane)));
+    await this.library.put({ id, manifest, added: Date.now(), ...(o.forMesh ? { forMesh: true } : {}) });
     await this.keepManifest(id, manifest);
     this.holdingsChanged();
     this.noteHolder(this.self, summary(id, manifest));

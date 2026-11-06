@@ -9,6 +9,7 @@ import './style.css';
 import { joinMesh } from '../core/peerpigeon.ts';
 import { PigeonFS, type NetworkFile, type Offer } from '../core/pigeonfs.ts';
 import { idbStores } from '../core/store-idb.ts';
+import { Greedy } from '../core/greedy.ts';
 import type { LibraryEntry } from '../core/store.ts';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -53,6 +54,34 @@ async function main(): Promise<void> {
   const fs = new PigeonFS(mesh, chunks, library);
   await fs.start();
   (globalThis as Record<string, unknown>).pigeonfs = fs;
+
+  // Greedy storage: the space lent to the mesh is this browser's setting, kept in the private space.
+  const settingsKey = 'pfs/settings';
+  const saved = (await mesh.storage?.get('private', settingsKey).catch(() => null)) as { lendGB?: number } | null;
+  const lendGB = typeof saved?.lendGB === 'number' ? saved.lendGB : 1;
+  const greedy = new Greedy(fs, {
+    quota: lendGB * 2 ** 30,
+    // What the browser still allows this site (it may clear a site that fills up).
+    freeSpace: async () => { const e = await navigator.storage?.estimate?.(); return e?.quota !== undefined ? e.quota - (e.usage ?? 0) : null; },
+  });
+  greedy.start();
+  const lend = $<HTMLInputElement>('lend');
+  const showLend = () => { $('lend-value').textContent = Number(lend.value) ? `${lend.value} GB` : 'None'; };
+  lend.value = String(lendGB);
+  showLend();
+  lend.addEventListener('input', showLend);
+  lend.addEventListener('change', () => {
+    const gb = Number(lend.value);
+    greedy.setQuota(gb * 2 ** 30);
+    void mesh.storage?.put('private', settingsKey, { lendGB: gb }).catch(() => {});
+  });
+  const renderLend = () => {
+    const st = greedy.status();
+    $('s-lent').textContent = `${plural(st.files, 'file')} · ${size(st.used)} of ${size(st.room)}`;
+    $('lend-doing').textContent = st.doing;
+  };
+  renderLend();
+  setInterval(renderLend, 2000);
   $<HTMLButtonElement>('find-button').disabled = false;
   $('s-self').textContent = mesh.self.slice(0, 12);
   $('s-self').className = 'id';
@@ -134,7 +163,7 @@ async function main(): Promise<void> {
     $('s-bytes').textContent = size(u.bytes);
     $('s-chunks').textContent = String(u.chunks);
     const linked = mesh.peers();
-    $('mine').replaceChildren(...files.map((e: LibraryEntry) => row(e.manifest.name, [`${size(e.manifest.size)} · ${new Date(e.added).toLocaleDateString()}`], [
+    $('mine').replaceChildren(...files.map((e: LibraryEntry) => row(e.manifest.name, [`${size(e.manifest.size)} · `, e.forMesh ? el('span', { className: 'lent', textContent: 'for the mesh' }) : new Date(e.added).toLocaleDateString()], [
       button('Save', () => void save(e.id, e.manifest.name, e.manifest.type), true),
       ...(linked.length ? [button('Offer', () => { for (const p of mesh.peers()) fs.offer(p, e); }, true, `Tell the ${plural(linked.length, 'linked peer')} about it`)] : []),
       button('Remove', () => void fs.remove(e.id), true, 'Stop holding it here'),

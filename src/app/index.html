@@ -50,6 +50,20 @@
         </section>
 
         <section class="block">
+          <h2>Lend space</h2>
+          <div class="quota">
+            <span>For the mesh</span>
+            <input id="lend" type="range" min="0" max="20" step="0.5" value="1" aria-label="Space lent to the mesh, in GB" />
+            <output id="lend-value">1 GB</output>
+          </div>
+          <dl class="stats">
+            <dt>Holding for the mesh</dt><dd id="s-lent">0 files</dd>
+          </dl>
+          <p class="note" id="lend-doing"></p>
+          <p class="note">Files the mesh holds too few copies of (fewer than three live) are kept here, up to this much, and given back when they have copies enough or this browser needs the room. Your own files never count against it.</p>
+        </section>
+
+        <section class="block">
           <h2>Mesh</h2>
           <dl class="stats">
             <dt>You</dt><dd id="s-self">…</dd>
