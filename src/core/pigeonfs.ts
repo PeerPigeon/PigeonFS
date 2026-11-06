@@ -18,7 +18,9 @@
  *                               checked against the id;
  *  - user    pfs/holds/<owner>  what each peer holds, and how much: only that
  *                               peer can change it, and every peer replicates
- *                               it, so holders are known without asking.
+ *                               the whole namespace (PeerPigeon's `replicate`:
+ *                               a newcomer gets every record on linking), so
+ *                               holders are known without asking.
  * Without storage (or when it has no answer) a holder is asked directly ("man?").
  */
 import { fromBase64, randomId, sha256Hex, toBase64 } from './bytes.ts';
@@ -99,7 +101,7 @@ export class PigeonFS {
     this.chunkTimeoutMs = options.chunkTimeoutMs ?? 20_000;
     this.searchMs = options.searchMs ?? 1500;
     mesh.onMessage((from, data) => { void this.receive(from, data); });
-    mesh.onPeersChanged(() => { this.sayOwnerSoon(); this.emit('change'); });
+    mesh.onPeersChanged(() => this.emit('change'));
     mesh.storage?.onChange((space, key) => { if (space === 'user' && key.startsWith(HOLDINGS_PREFIX)) this.emit('change'); });
   }
 
@@ -108,43 +110,6 @@ export class PigeonFS {
     if (!this.mesh.storage) return;
     for (const e of await this.library.list()) await this.keepManifest(e.id, e.manifest);
     await this.publishHoldings();
-    this.sayOwner();
-    this.sayOwnerSoon();
-    const every = setInterval(() => this.sayOwner(), 30_000);
-    (every as { unref?: () => void }).unref?.();
-  }
-
-  /**
-   * Tell the mesh whose holdings record is this peer's (at start, and whenever a peer links): PeerPigeon
-   * catches a newcomer up only on records it already asked for, so peers say where theirs are, and a
-   * peer that hears of one it does not hold asks for it (and so keeps it current from then on).
-   */
-  private sayOwner(): void {
-    const storage = this.mesh.storage;
-    if (storage) this.mesh.broadcast(this.msg('owner', { owner: storage.owner }));
-  }
-
-  /** Again a moment after a link comes up (the first messages on a new link can be lost), and once more later. */
-  private ownerTimers: ReturnType<typeof setTimeout>[] = [];
-  private sayOwnerSoon(): void {
-    if (!this.mesh.storage) return;
-    for (const t of this.ownerTimers) clearTimeout(t);
-    this.ownerTimers = [1000, 5000].map((ms) => {
-      const t = setTimeout(() => this.sayOwner(), ms);
-      (t as { unref?: () => void }).unref?.();
-      return t;
-    });
-  }
-
-  private readonly asked = new Set<string>();
-  private readonly answered = new Map<string, number>();
-  private async learnOwner(owner: string): Promise<void> {
-    const storage = this.mesh.storage;
-    if (!storage || owner === storage.owner || this.asked.has(owner) || !/^[\w.\-~]{8,200}$/.test(owner)) return;
-    this.asked.add(owner);
-    const got = await storage.retrieve('user', HOLDINGS_PREFIX + owner, 4000).catch(() => null);
-    if (!got) this.asked.delete(owner);
-    else this.emit('change');
   }
 
   private publishing: ReturnType<typeof setTimeout> | null = null;
@@ -398,7 +363,7 @@ export class PigeonFS {
   }
 
   private announce(files: FileSummary[]): void {
-    if (files.length) this.mesh.broadcast(this.msg('have', { files, owner: this.mesh.storage?.owner }));
+    if (files.length) this.mesh.broadcast(this.msg('have', { files }));
   }
 
   /** Ask one peer; its answer (with the same r), or null if none in time. */
@@ -443,26 +408,14 @@ export class PigeonFS {
     const m = data as Message;
     if (!m || typeof m !== 'object' || m[TAG] !== 1 || typeof m.t !== 'string') return;
     // Answers to something this peer asked.
-    if (m.t === 'found' && typeof m.owner === 'string') void this.learnOwner(m.owner);
     if (typeof m.r === 'string' && this.waiting.has(m.r) && ['found', 'man', 'man-', 'chunk', 'chunk-'].includes(m.t)) {
       this.waiting.get(m.r)!.done(from, m);
       return;
     }
     switch (m.t) {
       case 'have':
-        if (typeof m.owner === 'string') void this.learnOwner(m.owner);
         for (const f of Array.isArray(m.files) ? m.files : []) if (isSummary(f)) this.noteHolder(from, f);
         this.emit('change');
-        return;
-      case 'owner':
-        if (typeof m.owner === 'string') {
-          // A peer new to this one: tell it where this peer's record is too (once in a while, not back and forth).
-          if (!this.asked.has(m.owner) && this.mesh.storage && Date.now() - (this.answered.get(m.owner) ?? 0) > 30_000) {
-            this.answered.set(m.owner, Date.now());
-            this.mesh.sendDirect(from, this.msg('owner', { owner: this.mesh.storage.owner }));
-          }
-          await this.learnOwner(m.owner);
-        }
         return;
       case 'gone':
         for (const id of Array.isArray(m.ids) ? m.ids : []) {
@@ -477,7 +430,7 @@ export class PigeonFS {
           if (typeof m.id === 'string' ? e.id === m.id : matches(String(m.q ?? ''), e.manifest.name)) files.push(summary(e.id, e.manifest));
           if (files.length >= 200) break;
         }
-        if (files.length) this.mesh.sendDirect(from, this.msg('found', { r: m.r, files, owner: this.mesh.storage?.owner }));
+        if (files.length) this.mesh.sendDirect(from, this.msg('found', { r: m.r, files }));
         return;
       }
       case 'man?': {

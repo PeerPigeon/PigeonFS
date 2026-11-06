@@ -47,8 +47,8 @@ export async function joinMesh(o: JoinOptions = {}): Promise<PeerPigeonMesh> {
     crypto: o.keyPair ? { keyPair: o.keyPair } : {},
     storage: {
       dbName: o.dbName ?? 'pigeonfs-storage',
-      // Holdings records replicate; anything else only when asked for (and requests always reach holders).
-      syncFilter: (_space, key, context) => context.kind === 'retrieve-request' || key.startsWith(HOLDINGS_PREFIX) || !!node.storage?.isSubscribed(_space, key),
+      // Holdings records: kept in full, and a newly linked peer is sent all of them. Anything else only when asked for.
+      replicate: [HOLDINGS_PREFIX],
     },
   });
   await node.start();
