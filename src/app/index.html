@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PigeonFS</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <header>
+    <h1>PigeonFS</h1>
+    <p id="status">Joining the mesh…</p>
+  </header>
+  <main>
+    <section id="drop">
+      <label class="share">
+        <input type="file" id="pick" multiple hidden />
+        <strong>Share files</strong>
+        <span>Choose them, or drop them anywhere on this page. They stay in this browser and go to whoever asks.</span>
+      </label>
+      <p id="sharing" class="note"></p>
+    </section>
+    <section>
+      <form id="find">
+        <input id="query" type="search" placeholder="Find files on the mesh (empty: everything)" autocomplete="off" />
+        <button type="submit">Find</button>
+      </form>
+      <ul id="results" class="files"></ul>
+    </section>
+    <section id="offers-section" hidden>
+      <h2>Offered to you</h2>
+      <ul id="offers" class="files"></ul>
+    </section>
+    <section>
+      <h2>Here</h2>
+      <p id="usage" class="note"></p>
+      <ul id="mine" class="files"></ul>
+    </section>
+  </main>
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>

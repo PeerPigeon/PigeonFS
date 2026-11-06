@@ -1,73 +1,27 @@
 {
   "name": "pigeonfs",
-  "version": "1.1.3",
-  "description": "P2P file sharing and searchable datasets using PeerPigeon",
+  "version": "2.0.0-alpha.1",
+  "description": "Files across a PeerPigeon mesh: share, find and fetch them by content, chunk by chunk, from whoever holds them.",
   "type": "module",
-  "main": "electron/main.js",
+  "license": "MIT",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview",
-    "server": "node node-server.js",
-    "electron": "npm run build && electron .",
-    "electron:dev": "NODE_ENV=development electron .",
-    "electron:build": "npm run build && electron-builder",
-    "package": "pkg node-server.js -t node18-macos-x64,node18-linux-x64,node18-win-x64 -o dist/pigeonfs-server"
+    "build": "tsc --noEmit && vite build",
+    "peer": "tsx src/node/peer.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --import tsx tests/*.test.ts"
   },
   "dependencies": {
-    "peerpigeon": "^1.0.6",
-    "vue": "^3.4.0",
-    "ws": "^8.18.3"
+    "peerpigeon": "github:PeerPigeon/PeerPigeon#382d5fb",
+    "werift": "0.24.4",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
-    "@vitejs/plugin-vue": "^5.0.0",
-    "electron": "^28.0.0",
-    "electron-builder": "^24.9.1",
-    "pkg": "^5.8.1",
-    "vite": "^6.3.6"
-  },
-  "build": {
-    "appId": "com.peerpigeon.pigeonfs",
-    "productName": "PigeonFS",
-    "directories": {
-      "output": "dist"
-    },
-    "files": [
-      "dist/**/*",
-      "node_modules/**/*",
-      "electron/**/*",
-      "node-server.js",
-      "book.js",
-      "public/**/*",
-      "data/**/*"
-    ],
-    "mac": {
-      "target": "dmg",
-      "icon": "data/files/pigeonlogo.png"
-    },
-    "win": {
-      "target": "nsis",
-      "icon": "data/files/pigeonlogo.png"
-    },
-    "linux": {
-      "target": "AppImage",
-      "icon": "data/files/pigeonlogo.png"
-    }
-  },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/PeerPigeon/PigeonFS.git"
-  },
-  "keywords": [
-    "p2p",
-    "peer-to-peer",
-    "search",
-    "distributed",
-    "dataset",
-    "book.js",
-    "radix-tree",
-    "peerpigeon"
-  ],
-  "author": "PeerPigeon",
-  "license": "MIT"
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "@vitejs/plugin-basic-ssl": "^1.2.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3",
+    "vite": "^6.4.1"
+  }
 }
