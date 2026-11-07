@@ -45,7 +45,7 @@ It keeps records in `--dir`, one folder per room (`rooms/`), and file chunks und
 
 **Files outlive their peers.** A peer puts every file it holds on the servers too, chunk by chunk, each sealed with a key made from its own hash, so a server can't read it and the same chunk is kept once whoever adds it. Each chunk sits on the 3 servers closest to its address. The file is then listed in the room (public `pfs/files/<id>`). A search finds it there when no peer holding it is up, and a fetch takes its chunks from peers first, then the servers.
 
-**Where data goes.** A server or a Node peer keeps everything in one folder: `--dir`, or the `PIGEONFS_DIR` environment variable, or `pigeonfs-server` / `pigeonfs-data` in the current folder. `~` means your home folder. On a Mac, an external drive is `/Volumes/<drive name>/…`; if that drive is not mounted, it refuses to start rather than filling the startup disk.
+**Where data goes.** A server or a Node peer keeps everything in one folder: `--dir`, or the `PIGEONFS_DIR` environment variable, or `pigeonfs-server` / `pigeonfs-data` in the current folder. A server, when none is given, uses the folder it used last time, else a server data folder it finds on this machine's drives. On start it prints the folder and what it holds and asks (Enter uses it, or type another folder); the choice is remembered. `~` means your home folder. On a Mac, an external drive is `/Volumes/<drive name>/…`; if that drive is not mounted, it refuses to start rather than filling the startup disk.
 
 ## How it works
 

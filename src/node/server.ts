@@ -15,7 +15,7 @@ import { mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promi
 import path from 'node:path';
 import { PeerPigeonNode, type ServerRecord, type ServerRecordStore } from 'peerpigeon';
 import { installWebRtc } from './webrtc.ts';
-import { dataDir } from './where.ts';
+import { chooseServerDir } from './where.ts';
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -87,7 +87,7 @@ export async function fsRecordStore(dir: string): Promise<ServerRecordStore> {
 }
 
 async function main(): Promise<void> {
-  const dir = dataDir(arg('dir'), 'pigeonfs-server');
+  const dir = await chooseServerDir(arg('dir'));
   await installWebRtc();
   // A relay on this machine, when there is one, so the server is listed where the peers here look first.
   let signal = arg('signal');
