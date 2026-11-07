@@ -13,6 +13,7 @@ import { Greedy } from '../core/greedy.ts';
 import type { LibraryEntry } from '../core/store.ts';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+$('version').textContent = `Version ${(import.meta as unknown as { env: Record<string, string> }).env.PFS_VERSION ?? 'dev'}.`;
 const query = new URLSearchParams(location.search);
 
 function size(n: number): string {
