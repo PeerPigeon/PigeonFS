@@ -95,7 +95,9 @@ async function main(): Promise<void> {
   if (!process.argv.includes('--no-page')) {
     try {
       const { createServer } = await import('vite');
-      const page = await createServer({ configFile: path.resolve(import.meta.dirname, '../../vite.config.ts') });
+      // Prebundle dependencies afresh each start: a PeerPigeon reinstalled from GitHub keeps its version number,
+      // so Vite's cache would otherwise keep serving the old one to the page.
+      const page = await createServer({ configFile: path.resolve(import.meta.dirname, '../../vite.config.ts'), optimizeDeps: { force: true } });
       await page.listen();
       const urls = page.resolvedUrls;
       // This machine (localhost) and its addresses on the network; not the other names for this machine.
