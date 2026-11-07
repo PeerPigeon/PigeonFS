@@ -92,6 +92,7 @@ export async function joinMesh(o: JoinOptions = {}): Promise<PeerPigeonMesh> {
       const client = (node.mesh as unknown as { signalingClient?: { currentSignalUrl?: string } }).signalingClient;
       return String(client?.currentSignalUrl ?? '');
     },
+    relayName: () => node.currentRelayName(),
     stop: () => node.destroy(),
   };
 }

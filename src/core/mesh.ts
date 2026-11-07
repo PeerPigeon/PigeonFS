@@ -13,8 +13,10 @@ export interface Mesh {
   sendDirect(peer: string, data: unknown): boolean;
   onMessage(listener: (from: string, data: unknown) => void): void;
   onPeersChanged(listener: () => void): void;
-  /** The relay in use, for showing (empty if unknown). */
+  /** The relay in use (empty if unknown). */
   relay(): string;
+  /** The relay in use, as a person reads it: a local relay by its name. */
+  relayName?(): string;
   /** The mesh's storage (PeerPigeon's spaces), if it has one. */
   readonly storage: MeshStorage | null;
   /** Storage servers (content kept by its hash, sealed), if this mesh uses them. */

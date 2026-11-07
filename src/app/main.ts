@@ -105,7 +105,7 @@ async function main(): Promise<void> {
     const peers = mesh.peers();
     $('status').textContent = peers.length ? `${plural(peers.length, 'peer')} linked` : 'Alone so far';
     $('live-dot').hidden = !peers.length;
-    $('s-relay').textContent = relayName(mesh.relay()) || '…';
+    $('s-relay').textContent = mesh.relayName?.() || relayName(mesh.relay()) || '…';
     const servers = mesh.servers?.count() ?? 0;
     $('s-servers').textContent = mesh.servers ? (servers ? `${servers} linked` : 'none found yet') : 'off';
     $('server-doing').textContent = fs.serverStatus;
