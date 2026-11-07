@@ -23,6 +23,8 @@ function arg(name: string): string | undefined {
 }
 
 const HEX = /^[0-9a-f]{64}$/;
+// A room: 64 hex, or 'o' and 64 hex for a room only one key writes to (PeerPigeon's owned rooms).
+const ROOM = /^o?[0-9a-f]{64}$/;
 
 /**
  * Records in a folder: <dir>/rooms/<room>/<slot>.json, written whole or not at
@@ -41,7 +43,7 @@ export async function fsRecordStore(dir: string): Promise<ServerRecordStore> {
     }
   }
   for (const room of await readdir(roomsDir).catch(() => [] as string[])) {
-    if (!HEX.test(room)) continue;
+    if (!ROOM.test(room)) continue;
     const m = new Map<string, ServerRecord>();
     for (const name of await readdir(path.join(roomsDir, room)).catch(() => [] as string[])) {
       if (!name.endsWith('.json')) continue;
@@ -52,7 +54,7 @@ export async function fsRecordStore(dir: string): Promise<ServerRecordStore> {
   return {
     async get(room, slot) { return index.get(room)?.get(slot) ?? null; },
     async put(rec) {
-      if (!HEX.test(rec.room) || !HEX.test(rec.slot)) throw new Error('bad record');
+      if (!ROOM.test(rec.room) || !HEX.test(rec.slot)) throw new Error('bad record');
       const folder = path.join(roomsDir, rec.room);
       await mkdir(folder, { recursive: true });
       const file = path.join(folder, `${rec.slot}.json`), tmp = `${file}.${process.pid}.tmp`;
