@@ -47,6 +47,19 @@ function row(name: string, detail: (Node | string)[], actions: HTMLElement[], pr
   return li;
 }
 
+/** A relay as a person reads it: its host (and port, if not the usual), and "direct" for a punched WebRTC link to it. */
+function relayName(url: string): string {
+  if (!url) return '';
+  const direct = /^webrtc-direct:\/\/([^/]+)/.exec(url);
+  if (direct) return `${direct[1]} (direct)`;
+  try {
+    const u = new URL(url);
+    return u.port && u.port !== '443' && u.port !== '80' ? `${u.hostname}:${u.port}` : u.hostname;
+  } catch {
+    return url;
+  }
+}
+
 async function main(): Promise<void> {
   const network = query.get('network') ?? 'pigeonfs', room = query.get('room') ?? 'main';
   const { chunks, library } = await idbStores();
@@ -92,7 +105,7 @@ async function main(): Promise<void> {
     const peers = mesh.peers();
     $('status').textContent = peers.length ? `${plural(peers.length, 'peer')} linked` : 'Alone so far';
     $('live-dot').hidden = !peers.length;
-    $('s-relay').textContent = mesh.relay() || '…';
+    $('s-relay').textContent = relayName(mesh.relay()) || '…';
     const servers = mesh.servers?.count() ?? 0;
     $('s-servers').textContent = mesh.servers ? (servers ? `${servers} linked` : 'none found yet') : 'off';
     $('server-doing').textContent = fs.serverStatus;
