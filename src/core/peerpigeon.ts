@@ -65,15 +65,16 @@ export async function joinMesh(o: JoinOptions = {}): Promise<PeerPigeonMesh> {
       .map((r) => ({ key: r.key, value: r.value, owner: r.ownerId, updatedAt: r.updatedAt })),
     onChange: (listener) => s.on('change', (e) => listener(e.space as Space, e.key)),
   };
-  const link = node.storageServers;
+  // The link to the storage servers comes up once the node has its relay: read it each time.
+  const link = () => node.storageServers;
   return {
     self,
     storage,
-    servers: link ? {
-      available: () => link.hasServers(),
+    servers: s ? {
+      available: async () => (await link()?.hasServers()) ?? false,
       count: () => s.serverCount(),
-      put: (bytes) => link.putBlob(bytes),
-      get: (hash) => link.getBlob(hash),
+      put: async (bytes) => (await link()?.putBlob(bytes)) ?? 0,
+      get: async (hash) => (await link()?.getBlob(hash)) ?? null,
     } : null,
     keyPair: () => node.crypto?.getKeyPair() ?? null,
     peers: () => node.getConnectedPeers(),

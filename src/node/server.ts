@@ -87,7 +87,13 @@ export async function fsRecordStore(dir: string): Promise<ServerRecordStore> {
 async function main(): Promise<void> {
   const dir = dataDir(arg('dir'), 'pigeonfs-server');
   await installWebRtc();
-  const signal = arg('signal');
+  // A relay on this machine, when there is one, so the server is listed where the peers here look first.
+  let signal = arg('signal');
+  if (!signal) {
+    const port = process.env.FREERTC_PORT ?? '8788';
+    const up = await fetch(`http://127.0.0.1:${port}/stats`, { signal: AbortSignal.timeout(1500) }).then((r) => r.ok).catch(() => false);
+    if (up) { signal = `ws://127.0.0.1:${port}/ws`; console.log(`Using the relay on this machine (${signal}).`); }
+  }
   const server = PeerPigeonNode.storageServer(signal ? { signalingServer: signal, automaticSignalingServer: false } : {}, await fsRecordStore(dir));
   await server.start();
   console.log(`PigeonFS storage server is up; keeping records in ${dir}.`);
