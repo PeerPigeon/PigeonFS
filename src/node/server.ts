@@ -98,7 +98,9 @@ async function main(): Promise<void> {
       const page = await createServer({ configFile: path.resolve(import.meta.dirname, '../../vite.config.ts') });
       await page.listen();
       const urls = page.resolvedUrls;
-      for (const u of [...(urls?.local ?? []), ...(urls?.network ?? [])]) console.log(`Page: ${u}?network=pigeonfs&room=main`);
+      // This machine (localhost) and its addresses on the network; not the other names for this machine.
+      const local = (urls?.local ?? []).filter((u) => new URL(u).hostname === 'localhost');
+      for (const u of [...local, ...(urls?.network ?? [])]) console.log(`Page: ${u}?network=pigeonfs&room=main`);
     } catch (e) {
       console.log(`The page could not start (${(e as Error).message}); the server runs without it.`);
     }
