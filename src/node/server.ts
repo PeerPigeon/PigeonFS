@@ -121,7 +121,16 @@ async function main(): Promise<void> {
     const line = `${s.rooms} room${s.rooms === 1 ? '' : 's'}, ${s.records} record${s.records === 1 ? '' : 's'}, ${s.blobs} chunk${s.blobs === 1 ? '' : 's'} (${(s.blobBytes / 1e6).toFixed(1)} MB); linked to ${s.servers} server${s.servers === 1 ? '' : 's'} and ${s.clients} peer${s.clients === 1 ? '' : 's'}`;
     if (line !== last) { console.log(line); last = line; }
   }, 3000).unref();
-  const stop = async () => { console.log('Stopping…'); await server.close(); process.exit(0); };
+  // Ctrl+C always stops it: closing gets 3 s at most, and a second Ctrl+C stops it at once.
+  let stopping = false;
+  const stop = async () => {
+    if (stopping) process.exit(1);
+    stopping = true;
+    console.log('Stopping… (Ctrl+C again to stop now)');
+    setTimeout(() => process.exit(0), 3000).unref();
+    await server.close().catch(() => {});
+    process.exit(0);
+  };
   process.on('SIGINT', () => void stop());
   process.on('SIGTERM', () => void stop());
 }
