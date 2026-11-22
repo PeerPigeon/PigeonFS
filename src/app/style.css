@@ -19,6 +19,30 @@
   color-scheme: dark;
 }
 
+/* By day: Cruise, as peer.ooo, PigeonChess and PigeonFeed. */
+html[data-theme='light'] {
+  --night: #e8f6f9;
+  --night-2: #f5fbfc;
+  --line: #bee6ee;
+  --line-strong: #8aa7b3;
+  --bright: #2a3747;
+  --bone: #2a3747;
+  --bone-2: #46586e;
+  --bone-3: #5a7187;
+  --sheen: #237a50;
+  --info: #2f62a3;
+  --warm: #9a6a1f;
+  --bad: #b4423a;
+  --on-bone: #ffffff;
+  color-scheme: light;
+}
+
+/* The theme switch, as on every PeerPigeon site: a bare line icon. */
+button.theme-switch { display: grid; place-items: center; width: 36px; height: 36px; flex: none; margin-left: 4px; margin-right: -8px; padding: 0; border: 0; background: none; color: var(--bone-2); }
+button.theme-switch:hover:not(:disabled) { color: var(--bright); }
+.theme-switch svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+html[data-theme='dark'] .theme-switch .moon, html[data-theme='light'] .theme-switch .sun { display: none; }
+
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { height: 100%; }
 body {
@@ -62,7 +86,7 @@ button.quiet:hover:not(:disabled) { color: var(--bone); border-color: transparen
 }
 .mark { font-weight: 800; font-stretch: 125%; font-size: 1.05rem; letter-spacing: -0.01em; color: var(--bright); }
 .mark span { color: var(--bone); }
-.status { display: inline-flex; align-items: center; gap: 8px; color: var(--bone-2); font-size: 0.9rem; text-align: right; }
+.status { display: inline-flex; align-items: center; gap: 8px; color: var(--bone-2); font-size: 0.9rem; text-align: right; margin-left: auto; }
 .live-dot { display: inline-flex; }
 .live-dot i { width: 8px; height: 8px; border-radius: 50%; background: var(--sheen); animation: pulse 1.6s ease-out infinite; }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--sheen) 60%, transparent); } 100% { box-shadow: 0 0 0 7px transparent; } }

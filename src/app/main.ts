@@ -13,6 +13,13 @@ import { Greedy } from '../core/greedy.ts';
 import type { LibraryEntry } from '../core/store.ts';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+
+// Light or dark: index.html picks it before the first paint; the switch in the top bar changes it.
+document.getElementById('theme-switch')?.addEventListener('click', () => {
+  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem('pigeonfs:theme', next); } catch { /* private mode: this visit only */ }
+});
 $('version').textContent = `Version ${(import.meta as unknown as { env: Record<string, string> }).env.PFS_VERSION ?? 'dev'}.`;
 const query = new URLSearchParams(location.search);
 
