@@ -4,13 +4,18 @@
  * carries their signaling. Peers find it through the relays (it announces the
  * role 'storage'), link to it over WebRTC, and move their records to it.
  *
- *   npm run server -- [--dir pigeonfs-server] [--signal ws://…] [--no-page]
+ *   npm run server -- [--dir pigeonfs-server] [--signal ws://…] [--no-page] [--owner <account key>]
+ *
+ * --owner names the PigeonIdP account that runs it (kept in <dir>/owner.json, read on each ask, so it can
+ * be changed while the server runs). Anyone can ask a server who its owner is; only that owner, signed in to
+ * console.peerpigeon.io, gets its numbers.
  *
  * It serves the PigeonFS page as well (https, port 5173), unless --no-page.
  *
  * It never sees a room, a key or a value: each record is the room's own
  * ciphertext under a hashed slot. Records are kept in --dir, one folder per room (rooms/), and file chunks, sealed, under blobs/.
  */
+import { readFileSync } from 'node:fs';
 import { mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { PeerPigeonNode, type ServerRecord, type ServerRecordStore } from 'peerpigeon';
@@ -86,8 +91,29 @@ export async function fsRecordStore(dir: string): Promise<ServerRecordStore> {
   };
 }
 
+const OWNER = /^[\w-]{20,100}\.[\w-]{20,100}$/;
+
+/** The account that runs the server: PIGEONFS_OWNER, else <dir>/owner.json. */
+export function ownerOf(dir: string): string | null {
+  const env = process.env.PIGEONFS_OWNER?.trim();
+  if (env && OWNER.test(env)) return env;
+  try {
+    const owner = JSON.parse(readFileSync(path.join(dir, 'owner.json'), 'utf8'))?.owner;
+    return typeof owner === 'string' && OWNER.test(owner) ? owner : null;
+  } catch {
+    return null;
+  }
+}
+
 async function main(): Promise<void> {
   const dir = await chooseServerDir(arg('dir'));
+  const owner = arg('owner');
+  if (owner !== undefined) {
+    if (!OWNER.test(owner)) throw new Error('--owner: the account key console.peerpigeon.io shows');
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, 'owner.json'), `${JSON.stringify({ v: 1, owner, at: Date.now() }, null, 2)}\n`, { mode: 0o600 });
+    console.log('This server is yours now: it shows up in console.peerpigeon.io.');
+  }
   await installWebRtc();
   // A relay on this machine, when there is one, so the server is listed where the peers here look first.
   let signal = arg('signal');
@@ -96,7 +122,7 @@ async function main(): Promise<void> {
     const up = await fetch(`http://127.0.0.1:${port}/stats`, { signal: AbortSignal.timeout(1500) }).then((r) => r.ok).catch(() => false);
     if (up) { signal = `ws://127.0.0.1:${port}/ws`; console.log(`Using the relay on this machine (${signal}).`); }
   }
-  const server = PeerPigeonNode.storageServer(signal ? { signalingServer: signal, automaticSignalingServer: false } : {}, await fsRecordStore(dir));
+  const server = PeerPigeonNode.storageServer(signal ? { signalingServer: signal, automaticSignalingServer: false } : {}, await fsRecordStore(dir), { owner: () => ownerOf(dir) });
   await server.start();
   console.log(`PigeonFS storage server is up; keeping records in ${dir}.`);
   // The page too, from the same command (--no-page to leave it out).
