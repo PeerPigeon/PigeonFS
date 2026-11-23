@@ -16,7 +16,7 @@
   "dependencies": {
     "@fontsource-variable/archivo": "^5.3.0",
     "freertc": "github:draeder/freertc#664e9fc",
-    "peerpigeon": "github:PeerPigeon/PeerPigeon#3dfdfdd",
+    "peerpigeon": "github:PeerPigeon/PeerPigeon#5150349",
     "werift": "0.24.4",
     "ws": "^8.21.3"
   },
