@@ -15,7 +15,7 @@
  * It never sees a room, a key or a value: each record is the room's own
  * ciphertext under a hashed slot. Records are kept in --dir, one folder per room (rooms/), and file chunks, sealed, under blobs/.
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { PeerPigeonNode, type ServerRecord, type ServerRecordStore } from 'peerpigeon';
@@ -105,6 +105,24 @@ export function ownerOf(dir: string): string | null {
   }
 }
 
+/**
+ * The keys whose passes the owner took back (console.peerpigeon.io, on taking someone out of the team), kept
+ * in <dir>/revoked.json so a restart keeps them.
+ */
+export function revokedIn(dir: string): { has(member: string): boolean; set(member: string, revoked: boolean): void } {
+  const file = path.join(dir, 'revoked.json');
+  let list: string[] = [];
+  try { const v = JSON.parse(readFileSync(file, 'utf8')); if (Array.isArray(v)) list = v.filter((x) => typeof x === 'string'); } catch { /* none yet */ }
+  const keys = new Set(list);
+  return {
+    has: (member) => keys.has(member),
+    set: (member, revoked) => {
+      if (revoked) keys.add(member); else keys.delete(member);
+      writeFileSync(file, `${JSON.stringify([...keys], null, 2)}\n`, { mode: 0o600 });
+    },
+  };
+}
+
 async function main(): Promise<void> {
   const dir = await chooseServerDir(arg('dir'));
   const owner = arg('owner');
@@ -122,7 +140,7 @@ async function main(): Promise<void> {
     const up = await fetch(`http://127.0.0.1:${port}/stats`, { signal: AbortSignal.timeout(1500) }).then((r) => r.ok).catch(() => false);
     if (up) { signal = `ws://127.0.0.1:${port}/ws`; console.log(`Using the relay on this machine (${signal}).`); }
   }
-  const server = PeerPigeonNode.storageServer(signal ? { signalingServer: signal, automaticSignalingServer: false } : {}, await fsRecordStore(dir), { owner: () => ownerOf(dir) });
+  const server = PeerPigeonNode.storageServer(signal ? { signalingServer: signal, automaticSignalingServer: false } : {}, await fsRecordStore(dir), { owner: () => ownerOf(dir), revoked: revokedIn(dir) });
   await server.start();
   console.log(`PigeonFS storage server is up; keeping records in ${dir}.`);
   // The page too, from the same command (--no-page to leave it out).
