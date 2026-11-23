@@ -42,20 +42,26 @@ export async function fsRecordStore(dir: string): Promise<ServerRecordStore> {
   const blobsDir = path.join(dir, 'blobs');
   await mkdir(blobsDir, { recursive: true });
   const blobSizes = new Map<string, number>();
+  // Read many files at once: one after another, 24k records and 10k chunks took two minutes on a drive the
+  // VM reaches over its shared folder, and the server was not listed until they were in.
+  const many = async <T>(items: T[], each: (item: T) => Promise<void>, at = 64) => {
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(at, items.length) }, async () => { while (next < items.length) await each(items[next++]); }));
+  };
+  const blobFiles: [string, string][] = [];
   for (const sub of await readdir(blobsDir).catch(() => [] as string[])) {
-    for (const name of await readdir(path.join(blobsDir, sub)).catch(() => [] as string[])) {
-      if (HEX.test(name)) blobSizes.set(name, (await stat(path.join(blobsDir, sub, name)).catch(() => null))?.size ?? 0);
-    }
+    for (const name of await readdir(path.join(blobsDir, sub)).catch(() => [] as string[])) if (HEX.test(name)) blobFiles.push([sub, name]);
   }
+  await many(blobFiles, async ([sub, name]) => { blobSizes.set(name, (await stat(path.join(blobsDir, sub, name)).catch(() => null))?.size ?? 0); });
+  const recordFiles: [string, string][] = [];
   for (const room of await readdir(roomsDir).catch(() => [] as string[])) {
     if (!ROOM.test(room)) continue;
-    const m = new Map<string, ServerRecord>();
-    for (const name of await readdir(path.join(roomsDir, room)).catch(() => [] as string[])) {
-      if (!name.endsWith('.json')) continue;
-      try { const rec = JSON.parse(await readFile(path.join(roomsDir, room, name), 'utf8')) as ServerRecord; m.set(rec.slot, rec); } catch { /* a torn file: skipped */ }
-    }
-    index.set(room, m);
+    index.set(room, new Map());
+    for (const name of await readdir(path.join(roomsDir, room)).catch(() => [] as string[])) if (name.endsWith('.json')) recordFiles.push([room, name]);
   }
+  await many(recordFiles, async ([room, name]) => {
+    try { const rec = JSON.parse(await readFile(path.join(roomsDir, room, name), 'utf8')) as ServerRecord; index.get(room)!.set(rec.slot, rec); } catch { /* a torn file: skipped */ }
+  });
   return {
     async get(room, slot) { return index.get(room)?.get(slot) ?? null; },
     async put(rec) {
