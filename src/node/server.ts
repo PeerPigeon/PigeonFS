@@ -62,6 +62,8 @@ export async function fsRecordStore(dir: string): Promise<ServerRecordStore> {
   await many(recordFiles, async ([room, name]) => {
     try { const rec = JSON.parse(await readFile(path.join(roomsDir, room, name), 'utf8')) as ServerRecord; index.get(room)!.set(rec.slot, rec); } catch { /* a torn file: skipped */ }
   });
+  const clearedFile = path.join(dir, 'cleared.json');
+  const cleared: Record<string, number> = await readFile(clearedFile, 'utf8').then((t) => JSON.parse(t), () => ({}));
   return {
     async get(room, slot) { return index.get(room)?.get(slot) ?? null; },
     async put(rec) {
@@ -94,6 +96,29 @@ export async function fsRecordStore(dir: string): Promise<ServerRecordStore> {
     },
     async blobs() { return [...blobSizes.keys()]; },
     async blobUsage() { let bytes = 0; for (const n of blobSizes.values()) bytes += n; return { count: blobSizes.size, bytes }; },
+    // Cleared by the owner (the console's Stored data): each record's file moves to
+    // <dir>/removed/<time>/<room>/, so it can be put back, and when it was cleared is kept in cleared.json
+    // so an old copy is not taken again.
+    async remove(room, slots, at) {
+      if (!ROOM.test(room)) return 0;
+      const aside = path.join(dir, 'removed', new Date().toISOString().replace(/[:.]/g, '-'), room);
+      let moved = 0;
+      for (const slot of slots) {
+        if (!HEX.test(slot)) continue;
+        cleared[`${room}:${slot}`] = Math.max(at, cleared[`${room}:${slot}`] ?? 0);
+        if (!index.get(room)?.has(slot)) continue;
+        await mkdir(aside, { recursive: true });
+        await rename(path.join(roomsDir, room, `${slot}.json`), path.join(aside, `${slot}.json`)).catch(() => {});
+        index.get(room)!.delete(slot);
+        moved++;
+      }
+      if (index.get(room)?.size === 0) index.delete(room);
+      const tmp = `${clearedFile}.${process.pid}.tmp`;
+      await writeFile(tmp, JSON.stringify(cleared));
+      await rename(tmp, clearedFile);
+      return moved;
+    },
+    async clearedAt(room, slot) { return cleared[`${room}:${slot}`] ?? 0; },
   };
 }
 
